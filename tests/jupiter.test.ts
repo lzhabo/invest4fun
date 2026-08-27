@@ -1,4 +1,5 @@
-import { Keypair } from "@solana/web3.js";
+import { Keypair, VersionedTransaction } from "@solana/web3.js";
+import bs58 from "bs58";
 import { describe, expect, it, vi } from "vitest";
 import {
 	SOLANA_ASSET_REGISTRY,
@@ -707,6 +708,58 @@ describe("Jupiter atomic Solana execution", () => {
 				candidates,
 			),
 		).rejects.toMatchObject({ code: "INVALID_TRANSACTION" });
+	});
+
+	it("derives the signed transaction signature before broadcast", async () => {
+		const signer = Keypair.generate();
+		const wallet = signer.publicKey.toBase58();
+		const { provider } = providerFor(wallet);
+		const assetId = SOLANA_ASSET_REGISTRY.SOL?.assetId;
+		if (!assetId) throw new Error("SOL_ASSET_REQUIRED");
+		const candidates = await candidatesFor(provider, wallet, [assetId]);
+		const result = await provider.prepareBasket(
+			wallet,
+			{
+				chain: "SOLANA",
+				cluster: "mainnet-beta",
+				inputToken: SOLANA_USDC_MINT,
+				sessionId: "signature-before-broadcast",
+				periodLimitUsd: 10,
+				selections: [{ assetId, amountInBaseUnits: "1000000" }],
+				slippageBps: 50,
+			},
+			candidates,
+		);
+		const prepared = result.solanaTransaction;
+		if (!prepared) throw new Error("PREPARED_TRANSACTION_REQUIRED");
+		const transaction = VersionedTransaction.deserialize(
+			Buffer.from(prepared.unsignedTransactionBase64, "base64"),
+		);
+		transaction.sign([signer]);
+		const signed = Buffer.from(transaction.serialize()).toString("base64");
+
+		expect(provider.signedTransactionSignature(prepared, signed)).toBe(
+			bs58.encode(transaction.signatures[0] ?? new Uint8Array()),
+		);
+	});
+
+	it("distinguishes confirmed from finalized status", async () => {
+		const wallet = Keypair.generate().publicKey.toBase58();
+		const { provider } = providerFor(wallet);
+		Object.assign(provider as object, {
+			connection: {
+				getSignatureStatuses: vi.fn(async () => ({
+					value: [
+						{ err: null, confirmationStatus: "finalized", slot: 123 },
+					],
+				})),
+			},
+		});
+
+		await expect(provider.transactionStatus("signature")).resolves.toEqual({
+			state: "FINALIZED",
+			slot: 123,
+		});
 	});
 
 	it("reconciles native SOL output separately from new token-account rent", async () => {

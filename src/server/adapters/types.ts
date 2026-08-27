@@ -136,8 +136,15 @@ export interface ExecutionProvider {
 		prepared: SolanaPreparedTransaction,
 		signedTransactionBase64: string,
 	): Promise<string>;
-	transactionStatus?(signature: string): Promise<{
-		state: "PENDING" | "FAILED" | "CONFIRMED";
+	signedTransactionSignature?(
+		prepared: SolanaPreparedTransaction,
+		signedTransactionBase64: string,
+	): string;
+	transactionStatus?(
+		signature: string,
+		lastValidBlockHeight?: number,
+	): Promise<{
+		state: "NOT_FOUND" | "PENDING" | "FAILED" | "CONFIRMED" | "FINALIZED";
 		slot?: number;
 	}>;
 	reconcileOutputs?(

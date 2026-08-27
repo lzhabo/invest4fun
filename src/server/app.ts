@@ -69,6 +69,7 @@ import { ExecutionProviderError } from "./adapters/types.js";
 import type { ExecutionActor } from "./auth.js";
 import { PrivyWalletAuth } from "./auth.js";
 import type { AppConfig } from "./config.js";
+import { broadcastPreparedExecution } from "./broadcast-execution.js";
 import {
 	assertCanonicalExecutionOwner,
 	assertPlanQuotesFresh,
@@ -1228,7 +1229,6 @@ export function createApp(deps: AppDependencies) {
 				throw new Error("EXECUTION_PROVIDER_MISMATCH");
 			}
 			if (execution.plan.chain === "SOLANA") {
-				assertPlanQuotesFresh(execution.plan);
 				const provider = executionProvider(
 					deps,
 					execution.plan.provider,
@@ -1241,12 +1241,14 @@ export function createApp(deps: AppDependencies) {
 					response.status(409).json({ error: "EXECUTION_NOT_PREPARED" });
 					return;
 				}
+				assertPlanQuotesFresh(execution.plan);
 				const preparedTransactions =
 					execution.plan.solanaTransactions ??
 					(execution.plan.solanaTransaction
 						? [execution.plan.solanaTransaction]
 						: []);
 				const submitSignedTransaction = provider.submitSignedTransaction;
+				const signedTransactionSignature = provider.signedTransactionSignature;
 				const signedTransactions = z
 					.array(z.string().min(1))
 					.parse(
@@ -1255,7 +1257,11 @@ export function createApp(deps: AppDependencies) {
 								? [request.body.signedTransaction]
 								: undefined),
 					);
-				if (!preparedTransactions.length || !submitSignedTransaction) {
+				if (
+					!preparedTransactions.length ||
+					!submitSignedTransaction ||
+					!signedTransactionSignature
+				) {
 					throw new Error("SOLANA_TRANSACTION_MISSING");
 				}
 				if (signedTransactions.length !== preparedTransactions.length) {
@@ -1264,44 +1270,20 @@ export function createApp(deps: AppDependencies) {
 						.json({ error: "INVALID_SOLANA_TRANSACTION_COUNT" });
 					return;
 				}
-				const submissions = await Promise.allSettled(
-					preparedTransactions.map((prepared, index) =>
-						submitSignedTransaction.call(
-							provider,
-							{
-								...prepared,
-								messageCommitment:
-									prepared.messageCommitment as `sha256:${string}`,
-							},
-							signedTransactions[index] ?? "",
-						),
-					),
-				);
-				const signatures = submissions.map((result) =>
-					result.status === "fulfilled" ? (result.value ?? "") : "",
-				);
-				const failedOutputs = submissions.flatMap((result, index) =>
-					result.status === "rejected"
-						? (preparedTransactions[index]?.expectedBalanceChanges ?? []).map(
-								(change) => ({
-									assetId: change.assetId,
-									amountOutBaseUnits: "0",
-									transactionHash: "",
-									status: "failed" as const,
-								}),
-							)
-						: [],
-				);
-				const submitted = signatures.some(Boolean);
-				response.json(
-					await deps.store.updateExecution(
-						execution.plan.executionId,
-						submitted ? "SUBMITTED" : "FAILED",
-						submitted ? signatures : [],
-						failedOutputs,
-						execution.plan.solanaTransactions ? "SEQUENTIAL" : "BATCH",
-					),
-				);
+				const broadcast = await broadcastPreparedExecution({
+					execution,
+					signedTransactions,
+					provider,
+					store: deps.store,
+				});
+				const current = broadcast.execution;
+				const hasUnknownBroadcast = broadcast.hasUnknownBroadcast;
+				response.status(hasUnknownBroadcast ? 202 : 200).json({
+					...current,
+					...(hasUnknownBroadcast
+						? { reconciliation: ["broadcast-unknown"] }
+						: {}),
+				});
 				return;
 			}
 		},
@@ -1354,60 +1336,98 @@ export function createApp(deps: AppDependencies) {
 				}
 				const transactionStatus = provider.transactionStatus.bind(provider);
 				const reconcileOutputs = provider.reconcileOutputs.bind(provider);
-				const reconciled = await Promise.all(
-					preparedTransactions.map(async (prepared, index) => {
-						const signature = execution.transactionHashes[index];
-						if (!signature) {
-							return prepared.expectedBalanceChanges.map((change) => ({
-								assetId: change.assetId,
-								amountOutBaseUnits: "0",
-								transactionHash: "",
-								status: "failed" as const,
-							}));
-						}
-						const status = await transactionStatus(signature);
-						if (!status || status.state === "PENDING") return undefined;
-						if (status.state === "FAILED") {
-							return prepared.expectedBalanceChanges.map((change) => ({
+				let current = execution;
+				let pending = false;
+				const outputsByAsset = new Map(
+					execution.settledOutputs.map((output) => [output.assetId, output]),
+				);
+				for (const [index, prepared] of preparedTransactions.entries()) {
+					const leg = current.legs[index];
+					const signature = leg?.signature;
+					if (!leg || !signature || leg.status === "PREPARED") {
+						pending = true;
+						continue;
+					}
+					if (leg.status === "FINALIZED" || leg.status === "FAILED") continue;
+					const observed = await transactionStatus(
+						signature,
+						leg.lastValidBlockHeight,
+					);
+					if (observed.state === "NOT_FOUND" || observed.state === "PENDING") {
+						pending = true;
+						continue;
+					}
+					if (observed.state === "FAILED") {
+						current = await deps.store.transitionExecutionLeg(
+							execution.plan.executionId,
+							index,
+							{
+								type: "OBSERVED_FAILED",
+								at: new Date().toISOString(),
+								failureCode: "SOLANA_TRANSACTION_FAILED",
+							},
+						);
+						for (const change of prepared.expectedBalanceChanges) {
+							outputsByAsset.set(change.assetId, {
 								assetId: change.assetId,
 								amountOutBaseUnits: "0",
 								transactionHash: signature,
-								blockNumber: status.slot?.toString(),
-								status: "failed" as const,
-							}));
+								blockNumber: observed.slot?.toString(),
+								status: "failed",
+							});
 						}
-						return reconcileOutputs(
-							signature,
-							session.wallet,
-							prepared.expectedBalanceChanges,
-						);
-					}),
-				);
-				if (reconciled.some((outputs) => !outputs)) {
-					response
-						.status(202)
-						.json({ ...execution, reconciliation: ["pending"] });
-					return;
-				}
-				const outputs = reconciled.flatMap((result) => result ?? []);
-				const successful = outputs.filter(
-					(output) => output.status === "success",
-				).length;
-				const status =
-					successful === outputs.length
-						? "SETTLED"
-						: successful > 0
-							? "PARTIAL"
-							: "FAILED";
-				response.json(
-					await deps.store.updateExecution(
+						continue;
+					}
+					const reconciled = await reconcileOutputs(
+						signature,
+						session.wallet,
+						prepared.expectedBalanceChanges,
+					);
+					if (!reconciled) {
+						pending = true;
+						continue;
+					}
+					for (const output of reconciled) {
+						outputsByAsset.set(output.assetId, output);
+					}
+					if (observed.state === "CONFIRMED") {
+						if (leg.status !== "CONFIRMED") {
+							current = await deps.store.transitionExecutionLeg(
+								execution.plan.executionId,
+								index,
+								{
+									type: "OBSERVED_CONFIRMED",
+									at: new Date().toISOString(),
+								},
+							);
+						}
+						pending = true;
+						continue;
+					}
+					const successful = reconciled.every(
+						(output) => output.status === "success",
+					);
+					current = await deps.store.transitionExecutionLeg(
 						execution.plan.executionId,
-						status,
-						execution.transactionHashes.filter(Boolean),
-						outputs,
-						execution.plan.solanaTransactions ? "SEQUENTIAL" : "BATCH",
-					),
+						index,
+						{
+							type: successful ? "OBSERVED_FINALIZED" : "OBSERVED_FAILED",
+							at: new Date().toISOString(),
+							...(successful ? {} : { failureCode: "OUTPUT_VALIDATION_FAILED" }),
+						},
+					);
+				}
+				const updated = await deps.store.updateExecution(
+					execution.plan.executionId,
+					current.status,
+					current.transactionHashes,
+					[...outputsByAsset.values()],
+					execution.plan.solanaTransactions ? "SEQUENTIAL" : "BATCH",
 				);
+				response.status(pending ? 202 : 200).json({
+					...updated,
+					...(pending ? { reconciliation: ["pending"] } : {}),
+				});
 				return;
 			}
 		},
@@ -1493,6 +1513,18 @@ export function createApp(deps: AppDependencies) {
 					error: "PERIOD_BUDGET_EXCEEDED",
 					message:
 						"This basket would exceed your weekly investment limit. Reduce the basket or wait for the next weekly period.",
+				});
+				return;
+			}
+			if (
+				error instanceof Error &&
+				(error.message.startsWith("INVALID_EXECUTION_LEG_TRANSITION") ||
+					error.message === "EXECUTION_LEG_NOT_FOUND")
+			) {
+				response.status(409).json({
+					error: "EXECUTION_STATE_CHANGED",
+					message:
+						"This transaction leg changed state. Refresh the receipt before trying again.",
 				});
 				return;
 			}

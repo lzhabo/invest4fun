@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import bs58 from "bs58";
 import {
 	AddressLookupTableAccount,
 	ComputeBudgetProgram,
@@ -458,51 +459,52 @@ export class JupiterProvider implements ExecutionProvider, CandidateProvider {
 				"The prepared Solana transaction expired. Refresh the basket.",
 			);
 		}
-		const supplied = Buffer.from(signedTransactionBase64, "base64");
-		let transaction: VersionedTransaction;
-		if (supplied.byteLength === 64) {
-			transaction = VersionedTransaction.deserialize(
-				Buffer.from(prepared.unsignedTransactionBase64, "base64"),
-			);
-			transaction.signatures[0] = new Uint8Array(supplied);
-		} else {
-			transaction = VersionedTransaction.deserialize(supplied);
-		}
-		const commitment = `sha256:${createHash("sha256")
-			.update(transaction.message.serialize())
-			.digest("hex")}`;
-		if (commitment !== prepared.messageCommitment) {
-			throw providerError(
-				"INVALID_TRANSACTION",
-				"The signed Solana transaction does not match the prepared basket.",
-			);
-		}
-		if (
-			!transaction.signatures[0] ||
-			transaction.signatures[0].every((byte) => byte === 0)
-		) {
-			throw providerError(
-				"INVALID_TRANSACTION",
-				"The Solana transaction is not signed.",
-			);
-		}
-		return this.connection.sendRawTransaction(transaction.serialize(), {
+		const { transaction, signature } = inspectSignedTransaction(
+			prepared,
+			signedTransactionBase64,
+		);
+		const submittedSignature = await this.connection.sendRawTransaction(
+			transaction.serialize(),
+			{
 			skipPreflight: false,
 			maxRetries: 3,
-		});
+			},
+		);
+		if (submittedSignature !== signature) {
+			throw providerError(
+				"INVALID_TRANSACTION",
+				"The Solana RPC returned an unexpected transaction signature.",
+			);
+		}
+		return signature;
 	}
 
-	async transactionStatus(signature: string) {
+	signedTransactionSignature(
+		prepared: SolanaPreparedTransaction,
+		signedTransactionBase64: string,
+	) {
+		return inspectSignedTransaction(prepared, signedTransactionBase64).signature;
+	}
+
+	async transactionStatus(signature: string, lastValidBlockHeight?: number) {
 		const statuses = await this.connection.getSignatureStatuses([signature], {
 			searchTransactionHistory: true,
 		});
 		const status = statuses.value[0];
-		if (!status) return { state: "PENDING" as const };
+		if (!status) {
+			if (lastValidBlockHeight !== undefined) {
+				const blockHeight = await this.connection.getBlockHeight("confirmed");
+				if (blockHeight > lastValidBlockHeight) {
+					return { state: "FAILED" as const };
+				}
+			}
+			return { state: "NOT_FOUND" as const };
+		}
 		if (status.err) return { state: "FAILED" as const };
-		if (
-			status.confirmationStatus === "confirmed" ||
-			status.confirmationStatus === "finalized"
-		) {
+		if (status.confirmationStatus === "finalized") {
+			return { state: "FINALIZED" as const, slot: status.slot };
+		}
+		if (status.confirmationStatus === "confirmed") {
 			return { state: "CONFIRMED" as const, slot: status.slot };
 		}
 		return { state: "PENDING" as const };
@@ -1081,6 +1083,46 @@ export class JupiterProvider implements ExecutionProvider, CandidateProvider {
 	private headers() {
 		return { "x-api-key": this.apiKey };
 	}
+}
+
+function inspectSignedTransaction(
+	prepared: SolanaPreparedTransaction,
+	signedTransactionBase64: string,
+) {
+	const supplied = Buffer.from(signedTransactionBase64, "base64");
+	let transaction: VersionedTransaction;
+	try {
+		if (supplied.byteLength === 64) {
+			transaction = VersionedTransaction.deserialize(
+				Buffer.from(prepared.unsignedTransactionBase64, "base64"),
+			);
+			transaction.signatures[0] = new Uint8Array(supplied);
+		} else {
+			transaction = VersionedTransaction.deserialize(supplied);
+		}
+	} catch {
+		throw providerError(
+			"INVALID_TRANSACTION",
+			"The signed Solana transaction could not be decoded.",
+		);
+	}
+	const commitment = `sha256:${createHash("sha256")
+		.update(transaction.message.serialize())
+		.digest("hex")}`;
+	if (commitment !== prepared.messageCommitment) {
+		throw providerError(
+			"INVALID_TRANSACTION",
+			"The signed Solana transaction does not match the prepared basket.",
+		);
+	}
+	const signatureBytes = transaction.signatures[0];
+	if (!signatureBytes || signatureBytes.every((byte) => byte === 0)) {
+		throw providerError(
+			"INVALID_TRANSACTION",
+			"The Solana transaction is not signed.",
+		);
+	}
+	return { transaction, signature: bs58.encode(signatureBytes) };
 }
 
 function dynamicMintFromAssetId(assetId: string) {

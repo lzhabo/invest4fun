@@ -9,6 +9,13 @@ import {
 	type OnboardingPreferences,
 } from "../domain/schemas.js";
 import { executionBudgetUsage } from "./store.js";
+import {
+	executionLegsFromPlan,
+	executionStatusFromLegs,
+	transitionExecutionLeg,
+	type ExecutionLeg,
+	type ExecutionLegTransition,
+} from "./execution-legs.js";
 import type {
   ExecutionRecord,
   SettledOutput,
@@ -46,6 +53,7 @@ interface ExecutionRow {
   transaction_hashes: string[];
   settled_outputs: SettledOutput[];
   settled_at: Date | null;
+	legs: ExecutionLeg[] | null;
 }
 
 export function normalizeStoredWallet(wallet: string, _chain: AppChain) {
@@ -163,7 +171,7 @@ export class PostgresStateStore implements StateStore {
   async getPeriodBudgetUsage(ownerId: string, epochId: string) {
     const result = await this.pool.query<ExecutionRow>(
       `SELECT e.plan, e.status, e.submission_mode, e.transaction_hashes,
-              e.settled_outputs, e.settled_at
+              e.settled_outputs, e.settled_at, e.legs
        FROM executions e JOIN weekly_sessions s ON s.id = e.session_id
        WHERE lower(s.owner_id) = lower($1) AND s.epoch_id = $2`,
       [ownerId, epochId]
@@ -343,7 +351,7 @@ export class PostgresStateStore implements StateStore {
         );
         const executions = await client.query<ExecutionRow>(
           `SELECT e.plan, e.status, e.submission_mode, e.transaction_hashes,
-                  e.settled_outputs, e.settled_at
+                  e.settled_outputs, e.settled_at, e.legs
            FROM executions e
            JOIN weekly_sessions s ON s.id = e.session_id
            WHERE lower(s.owner_id) = lower($1) AND s.epoch_id = $2`,
@@ -358,15 +366,16 @@ export class PostgresStateStore implements StateStore {
       }
       await client.query(
         `INSERT INTO executions (
-           id, session_id, authorized_plan_hash, execution_provider, plan, status
+           id, session_id, authorized_plan_hash, execution_provider, plan, status, legs
          )
-         VALUES ($1, $2, $3, $4, $5::jsonb, 'PREPARED')`,
+         VALUES ($1, $2, $3, $4, $5::jsonb, 'PREPARED', $6::jsonb)`,
         [
           plan.executionId,
           sessionId,
           plan.authorizedPlanHash,
           plan.provider,
-          JSON.stringify(plan)
+          JSON.stringify(plan),
+					JSON.stringify(executionLegsFromPlan(plan)),
         ]
       );
       await client.query(
@@ -381,7 +390,8 @@ export class PostgresStateStore implements StateStore {
         status: "PREPARED",
         submissionMode: "SEQUENTIAL",
         transactionHashes: [],
-        settledOutputs: []
+        settledOutputs: [],
+				legs: executionLegsFromPlan(plan),
       };
     } catch (error) {
       await client.query("ROLLBACK");
@@ -426,7 +436,7 @@ export class PostgresStateStore implements StateStore {
         );
         const executions = await client.query<ExecutionRow>(
           `SELECT e.plan, e.status, e.submission_mode, e.transaction_hashes,
-                  e.settled_outputs, e.settled_at
+                  e.settled_outputs, e.settled_at, e.legs
            FROM executions e JOIN weekly_sessions s ON s.id = e.session_id
            WHERE lower(s.owner_id) = lower($1) AND s.epoch_id = $2 AND e.id <> $3`,
           [session.owner_id, session.epoch_id, id]
@@ -442,16 +452,18 @@ export class PostgresStateStore implements StateStore {
         `UPDATE executions
          SET plan = $2::jsonb,
              authorized_plan_hash = $4,
+             legs = $5::jsonb,
              updated_at = now()
          WHERE id = $1
            AND status = 'PREPARED'
            AND authorized_plan_hash = $3
-         RETURNING plan, status, submission_mode, transaction_hashes, settled_outputs, settled_at`,
+         RETURNING plan, status, submission_mode, transaction_hashes, settled_outputs, settled_at, legs`,
         [
           id,
           JSON.stringify({ ...plan, executionId: id }),
           expectedAuthorizedPlanHash,
-          plan.authorizedPlanHash
+          plan.authorizedPlanHash,
+					JSON.stringify(executionLegsFromPlan({ ...plan, executionId: id })),
         ]
       );
       if (!result.rows[0]) throw new Error("EPOCH_ALREADY_EXECUTED");
@@ -485,7 +497,7 @@ export class PostgresStateStore implements StateStore {
            settled_at = CASE WHEN $6 THEN now() ELSE settled_at END,
            updated_at = now()
        WHERE id = $1
-       RETURNING plan, status, submission_mode, transaction_hashes, settled_outputs, settled_at`,
+       RETURNING plan, status, submission_mode, transaction_hashes, settled_outputs, settled_at, legs`,
         [id, status, transactionHashes, JSON.stringify(settledOutputs), submissionMode, terminal]
       );
       if (!result.rows[0]) throw new Error("EXECUTION_NOT_FOUND");
@@ -507,9 +519,73 @@ export class PostgresStateStore implements StateStore {
     }
   }
 
+	async transitionExecutionLeg(
+		id: string,
+		legIndex: number,
+		transition: ExecutionLegTransition,
+	): Promise<ExecutionRecord> {
+		const client = await this.pool.connect();
+		try {
+			await client.query("BEGIN");
+			const selected = await client.query<ExecutionRow>(
+				`SELECT plan, status, submission_mode, transaction_hashes,
+				        settled_outputs, settled_at, legs
+				 FROM executions WHERE id = $1 FOR UPDATE`,
+				[id],
+			);
+			const row = selected.rows[0];
+			if (!row) throw new Error("EXECUTION_NOT_FOUND");
+			const current = mapExecution(row);
+			const leg = current.legs[legIndex];
+			if (!leg || leg.index !== legIndex) {
+				throw new Error("EXECUTION_LEG_NOT_FOUND");
+			}
+			const legs = current.legs.map((item, index) =>
+				index === legIndex ? transitionExecutionLeg(item, transition) : item,
+			);
+			const status = executionStatusFromLegs(legs);
+			const terminal = ["SETTLED", "PARTIAL", "FAILED"].includes(status);
+			const result = await client.query<ExecutionRow>(
+				`UPDATE executions
+				 SET legs = $2::jsonb,
+				     status = $3,
+				     transaction_hashes = $4,
+				     settled_at = CASE WHEN $5 THEN now() ELSE settled_at END,
+				     updated_at = now()
+				 WHERE id = $1
+				 RETURNING plan, status, submission_mode, transaction_hashes,
+				           settled_outputs, settled_at, legs`,
+				[
+					id,
+					JSON.stringify(legs),
+					status,
+					legs.flatMap((item) => item.signature ?? []),
+					terminal,
+				],
+			);
+			if (terminal) {
+				await client.query(
+					`UPDATE weekly_sessions
+					 SET execution_id = NULL, status = 'OPEN', updated_at = now()
+					 WHERE execution_id = $1`,
+					[id],
+				);
+			}
+			await client.query("COMMIT");
+			const updated = result.rows[0];
+			if (!updated) throw new Error("EXECUTION_NOT_FOUND");
+			return mapExecution(updated);
+		} catch (error) {
+			await client.query("ROLLBACK");
+			throw error;
+		} finally {
+			client.release();
+		}
+	}
+
   private async getExecutionWithClient(client: PoolClient, id: string) {
     const result = await client.query<ExecutionRow>(
-      `SELECT plan, status, submission_mode, transaction_hashes, settled_outputs, settled_at
+      `SELECT plan, status, submission_mode, transaction_hashes, settled_outputs, settled_at, legs
        FROM executions WHERE id = $1`,
       [id]
     );
@@ -533,12 +609,14 @@ function mapSession(row: SessionRow): WeeklySession {
 }
 
 function mapExecution(row: ExecutionRow): ExecutionRecord {
+	const plan = executionPlanSchema.parse(row.plan);
   return {
-    plan: executionPlanSchema.parse(row.plan),
+		plan,
     status: row.status,
     submissionMode: row.submission_mode,
     transactionHashes: row.transaction_hashes,
     settledOutputs: row.settled_outputs,
-    settledAt: row.settled_at?.toISOString()
+		settledAt: row.settled_at?.toISOString(),
+		legs: row.legs?.length ? row.legs : executionLegsFromPlan(plan),
   };
 }

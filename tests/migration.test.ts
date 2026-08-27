@@ -37,4 +37,14 @@ describe("clean staging schema", () => {
 		expect(sql).toContain("DROP CONSTRAINT IF EXISTS executions_session_id_key");
 		expect(sql).toContain("executions_session_id_idx");
 	});
+
+	it("persists per-transaction execution legs for reconciliation", async () => {
+		const sql = await readFile(
+			new URL("../migrations/004_execution_legs.sql", import.meta.url),
+			"utf8",
+		);
+
+		expect(sql).toContain("legs jsonb NOT NULL");
+		expect(sql).toContain("executions_reconciliation_idx");
+	});
 });

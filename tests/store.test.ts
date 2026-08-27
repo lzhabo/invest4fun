@@ -218,6 +218,28 @@ describe("weekly session idempotency", () => {
     expect(submitted.submissionMode).toBe("BATCH");
   });
 
+	it("atomically records a leg signature before broadcast outcome", async () => {
+		const store = new MemoryStateStore();
+		const session = await store.openSession("0xabc", "2026-W30");
+		const current = { ...plan, sessionId: session.id };
+		const reserved = await store.reserveExecution(session.id, current);
+		expect(reserved.legs).toHaveLength(1);
+		const claimed = await store.transitionExecutionLeg(
+			current.executionId,
+			0,
+			{
+				type: "CLAIM_BROADCAST",
+				signature: "known-before-send",
+				at: "2026-08-27T12:00:00.000Z",
+			},
+		);
+		expect(claimed).toMatchObject({
+			status: "SUBMITTED",
+			transactionHashes: ["known-before-send"],
+			legs: [{ status: "BROADCASTING", signature: "known-before-send" }],
+		});
+	});
+
   it("allows multiple settled baskets while enforcing the weekly budget", async () => {
     const store = new MemoryStateStore();
     const session = await store.openSession(

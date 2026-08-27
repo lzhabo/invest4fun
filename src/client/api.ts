@@ -63,6 +63,25 @@ export interface ExecutionRecord {
 		status: "success" | "failed";
 	}>;
 	settledAt?: string;
+	legs?: Array<{
+		index: number;
+		assetIds: string[];
+		amountInBaseUnits: string;
+		messageCommitment: string;
+		lastValidBlockHeight: number;
+		status:
+			| "PREPARED"
+			| "BROADCASTING"
+			| "SUBMITTED"
+			| "CONFIRMED"
+			| "FINALIZED"
+			| "FAILED"
+			| "UNKNOWN";
+		signature?: string;
+		failureCode?: string;
+		failureMessage?: string;
+		updatedAt: string;
+	}>;
 	walletCalls?: Array<{
 		kind: "CANCEL_APPROVAL" | "APPROVAL" | "PERMIT" | "SWAP";
 		assetId?: string;

@@ -7,6 +7,13 @@ import type {
 	OnboardingPreferences,
 } from "../domain/schemas.js";
 import type { ProviderSnapshotCache } from "./adapters/types.js";
+import {
+	executionLegsFromPlan,
+	executionStatusFromLegs,
+	transitionExecutionLeg,
+	type ExecutionLeg,
+	type ExecutionLegTransition,
+} from "./execution-legs.js";
 
 export type SessionStatus =
   | "OPEN"
@@ -39,6 +46,7 @@ export interface ExecutionRecord {
   transactionHashes: string[];
   settledOutputs: SettledOutput[];
   settledAt?: string;
+	legs: ExecutionLeg[];
 }
 
 export interface SettledOutput {
@@ -106,6 +114,11 @@ export interface StateStore extends ProviderSnapshotCache {
     settledOutputs?: SettledOutput[],
     submissionMode?: ExecutionRecord["submissionMode"]
   ): Promise<ExecutionRecord>;
+	transitionExecutionLeg(
+		id: string,
+		legIndex: number,
+		transition: ExecutionLegTransition,
+	): Promise<ExecutionRecord>;
 }
 
 export class MemoryStateStore implements StateStore {
@@ -293,7 +306,8 @@ export class MemoryStateStore implements StateStore {
       status: "PREPARED",
       submissionMode: "SEQUENTIAL",
       transactionHashes: [],
-      settledOutputs: []
+      settledOutputs: [],
+			legs: executionLegsFromPlan(plan),
     };
     this.executions.set(plan.executionId, record);
     this.sessions.set(sessionId, {
@@ -379,6 +393,45 @@ export class MemoryStateStore implements StateStore {
     }
     return updated;
   }
+
+	async transitionExecutionLeg(
+		id: string,
+		legIndex: number,
+		transition: ExecutionLegTransition,
+	): Promise<ExecutionRecord> {
+		const existing = this.executions.get(id);
+		if (!existing) throw new Error("EXECUTION_NOT_FOUND");
+		const current = existing.legs[legIndex];
+		if (!current || current.index !== legIndex) {
+			throw new Error("EXECUTION_LEG_NOT_FOUND");
+		}
+		const legs = existing.legs.map((leg, index) =>
+			index === legIndex ? transitionExecutionLeg(leg, transition) : leg,
+		);
+		const status = executionStatusFromLegs(legs);
+		const terminal = ["SETTLED", "PARTIAL", "FAILED"].includes(status);
+		const updated: ExecutionRecord = {
+			...existing,
+			legs,
+			status,
+			transactionHashes: legs.flatMap((leg) => leg.signature ?? []),
+			settledAt: terminal ? new Date().toISOString() : undefined,
+		};
+		this.executions.set(id, updated);
+		if (terminal) this.releaseExecutionSession(id);
+		return updated;
+	}
+
+	private releaseExecutionSession(id: string) {
+		for (const [sessionId, session] of this.sessions) {
+			if (session.executionId !== id) continue;
+			this.sessions.set(sessionId, {
+				...session,
+				status: "OPEN",
+				executionId: undefined,
+			});
+		}
+	}
 }
 
 export function executionBudgetUsage(execution: ExecutionRecord): bigint {
