@@ -188,6 +188,7 @@ export function PositionsScreen({
 						return (
 							<article className="position-row" key={candidate.assetId}>
 								<AssetMark
+									assetId={candidate.assetId}
 									symbol={candidate.symbol}
 									iconUrl={candidate.iconUrl}
 									size="sm"

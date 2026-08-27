@@ -18,6 +18,20 @@ export interface WeeklySession {
 	status: string;
 }
 
+export interface PeriodBudgetUsage {
+	epochId: string;
+	usedBaseUnits: string;
+}
+
+export interface UserAccount {
+	privyUserId: string;
+	canonicalSolanaWallet: string;
+	timezone: string;
+	onboardingVersion: number;
+	onboardingCompletedAt?: string;
+	createdAt: string;
+}
+
 export interface FeedResponse {
 	candidates: Candidate[];
 	feed: FeedOutput;
@@ -269,6 +283,11 @@ function apiErrorMessage(code: string) {
 
 export const api = {
 	config: () => request<PublicConfig>("/api/config"),
+	accountBootstrap: (timezone: string) =>
+		request<UserAccount>("/api/account/bootstrap", {
+			method: "POST",
+			body: JSON.stringify({ timezone }),
+		}),
 	preferences: () => request<OnboardingPreferences>("/api/preferences"),
 	savePreferences: (preferences: OnboardingPreferences) =>
 		request<OnboardingPreferences>("/api/preferences", {
@@ -282,6 +301,22 @@ export const api = {
 		request<SolanaBalanceResponse>(
 			`/api/balances/${encodeURIComponent(wallet)}/solana`,
 		),
+	solanaLatestBlockhash: async () => {
+		const response = await request<{
+			result?: { value?: { blockhash?: string } };
+		}>("/api/solana/rpc", {
+			method: "POST",
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				id: "investmade-funding",
+				method: "getLatestBlockhash",
+				params: [{ commitment: "confirmed" }],
+			}),
+		});
+		const blockhash = response.result?.value?.blockhash;
+		if (!blockhash) throw new Error("SOLANA_BLOCKHASH_UNAVAILABLE");
+		return blockhash;
+	},
 	solanaPortfolio: (wallet: string) =>
 		request<SolanaPortfolioResponse>(
 			`/api/portfolio/${encodeURIComponent(wallet)}/solana`,
@@ -301,6 +336,8 @@ export const api = {
 				feedRankingProvider,
 			}),
 		}),
+	sessionBudget: (sessionId: string) =>
+		request<PeriodBudgetUsage>(`/api/sessions/${sessionId}/budget`),
 	generateFeed: (
 		sessionId: string,
 		preferences: OnboardingPreferences,

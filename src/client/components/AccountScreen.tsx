@@ -12,15 +12,22 @@ import {
 	ListOrdered,
 	Moon,
 	PiggyBank,
+	RefreshCw,
 	Scale,
 	Sun,
 	Tag,
 	Wallet,
 	X,
 } from "lucide-react";
+import {
+	type ConnectedStandardSolanaWallet,
+	useSignAndSendTransaction,
+} from "@privy-io/react-auth/solana";
+import { toDataURL } from "qrcode";
 import { Dialog } from "radix-ui";
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { formatUnits } from "viem";
+import { SOLANA_USDC_MINT } from "../../domain/solana";
 import type {
 	ExecutionProviderId,
 	FeedRankingProviderId,
@@ -28,6 +35,10 @@ import type {
 } from "../../domain/schemas";
 import { formatTicketSizeUsd, isTicketSizeUsd } from "../../domain/schemas";
 import { api } from "../api";
+import {
+	buildSolFundingTransaction,
+	buildUsdcFundingTransaction,
+} from "../funding-transactions";
 import type { AppTheme } from "../theme-settings";
 import { AccountBalanceSkeleton } from "./PageSkeletons";
 
@@ -45,7 +56,7 @@ export function AccountScreen({
 	onSaveTheme,
 }: {
 	wallet: string;
-	fundingWallet: string;
+	fundingWallet?: ConnectedStandardSolanaWallet;
 	preferences: OnboardingPreferences;
 	theme: AppTheme;
 	executionProviders: {
@@ -56,6 +67,7 @@ export function AccountScreen({
 	onSave: (preferences: OnboardingPreferences) => Promise<void>;
 	onSaveTheme: (theme: AppTheme) => void;
 }) {
+	const { signAndSendTransaction } = useSignAndSendTransaction();
 	const [draft, setDraft] = useState(preferences);
 	const [balance, setBalance] = useState<string>();
 	const [solBalance, setSolBalance] = useState<string>();
@@ -68,9 +80,35 @@ export function AccountScreen({
 	const [themeDraft, setThemeDraft] = useState(theme);
 	const [solanaTopUpOpen, setSolanaTopUpOpen] = useState(false);
 	const [addressCopied, setAddressCopied] = useState<"smart" | "funding">();
+	const [depositQrCode, setDepositQrCode] = useState("");
+	const [usdcFundingAmount, setUsdcFundingAmount] = useState("10");
+	const [solFundingAmount, setSolFundingAmount] = useState("0.01");
+	const [fundingAction, setFundingAction] = useState<"USDC" | "SOL">();
+	const [fundingStatus, setFundingStatus] = useState("");
+	const [fundingError, setFundingError] = useState("");
 
 	useEffect(() => setDraft(preferences), [preferences]);
 	useEffect(() => setThemeDraft(theme), [theme]);
+
+	const refreshBalance = useCallback(async () => {
+		if (!wallet) return;
+		setBalanceError("");
+		try {
+			const {
+				usdcBalanceBaseUnits,
+				usdcDecimals,
+				solBalanceLamports,
+				solPriceUsd: nextSolPriceUsd,
+			} = await api.solanaBalance(wallet);
+			setBalance(formatUnits(BigInt(usdcBalanceBaseUnits), usdcDecimals));
+			setSolBalance(formatUnits(BigInt(solBalanceLamports), 9));
+			setSolPriceUsd(nextSolPriceUsd);
+		} catch (caught) {
+			setBalanceError(
+				caught instanceof Error ? caught.message : "Could not read USDC balance.",
+			);
+		}
+	}, [wallet]);
 
 	useEffect(() => {
 		if (!wallet) {
@@ -80,50 +118,32 @@ export function AccountScreen({
 			setBalanceError("");
 			return;
 		}
-		let cancelled = false;
 		setBalance(undefined);
 		setSolBalance(undefined);
 		setSolPriceUsd(undefined);
-		setBalanceError("");
-		const balanceRequest = api
-			.solanaBalance(wallet)
-			.then(
-				({
-					usdcBalanceBaseUnits,
-					usdcDecimals,
-					solBalanceLamports,
-					solPriceUsd,
-				}) => ({
-					balance: formatUnits(BigInt(usdcBalanceBaseUnits), usdcDecimals),
-					solBalance: formatUnits(BigInt(solBalanceLamports), 9),
-					solPriceUsd,
-				}),
-			);
-		balanceRequest
-			.then(
-				({
-					balance: nextBalance,
-					solBalance: nextSolBalance,
-					solPriceUsd: nextSolPriceUsd,
-				}) => {
-				if (cancelled) return;
-				setBalance(nextBalance);
-				setSolBalance(nextSolBalance);
-				setSolPriceUsd(nextSolPriceUsd);
-			},
-			)
-			.catch((caught) => {
-				if (!cancelled)
-					setBalanceError(
-						caught instanceof Error
-							? caught.message
-							: "Could not read USDC balance.",
-					);
-			});
+		void refreshBalance();
+	}, [refreshBalance, wallet]);
+
+	useEffect(() => {
+		if (!solanaTopUpOpen || !wallet) return;
+		void refreshBalance();
+		const timer = window.setInterval(() => void refreshBalance(), 5_000);
+		return () => window.clearInterval(timer);
+	}, [refreshBalance, solanaTopUpOpen, wallet]);
+
+	useEffect(() => {
+		if (!solanaTopUpOpen || !wallet) {
+			setDepositQrCode("");
+			return;
+		}
+		let cancelled = false;
+		void toDataURL(`solana:${wallet}`, { margin: 1, width: 184 }).then((url) => {
+			if (!cancelled) setDepositQrCode(url);
+		});
 		return () => {
 			cancelled = true;
 		};
-	}, [wallet]);
+	}, [solanaTopUpOpen, wallet]);
 
 	async function save() {
 		setSaveError("");
@@ -169,7 +189,65 @@ export function AccountScreen({
 
 	function topUp() {
 		if (!wallet) return;
+		setFundingError("");
+		setFundingStatus("");
 		setSolanaTopUpOpen(true);
+	}
+
+	async function fundFromExternalWallet(asset: "USDC" | "SOL") {
+		if (!fundingWallet) {
+			onConnectExternalWallet();
+			return;
+		}
+		const amount = Number(
+			asset === "USDC" ? usdcFundingAmount : solFundingAmount,
+		);
+		if (!Number.isFinite(amount) || amount <= 0) {
+			setFundingError(`Enter a valid ${asset} amount.`);
+			return;
+		}
+		setFundingAction(asset);
+		setFundingError("");
+		setFundingStatus("");
+		try {
+			const blockhash = await api.solanaLatestBlockhash();
+			const transaction =
+				asset === "USDC"
+					? buildUsdcFundingTransaction({
+							from: fundingWallet.address,
+							to: wallet,
+							usdcAmount: amount,
+							blockhash,
+							mint: SOLANA_USDC_MINT,
+						})
+					: buildSolFundingTransaction({
+							from: fundingWallet.address,
+							to: wallet,
+							solAmount: amount,
+							blockhash,
+						});
+			await signAndSendTransaction({
+				transaction,
+				wallet: fundingWallet,
+				chain: "solana:mainnet",
+				options: {
+					uiOptions: {
+						description: `Transfer ${amount} ${asset} to your Invest4.fun wallet.`,
+						buttonText: `Send ${asset}`,
+					},
+				},
+			});
+			setFundingStatus(
+				`${asset} transfer submitted. Balance will update after confirmation.`,
+			);
+			await refreshBalance();
+		} catch (caught) {
+			setFundingError(
+				caught instanceof Error ? caught.message : `${asset} transfer failed.`,
+			);
+		} finally {
+			setFundingAction(undefined);
+		}
 	}
 
 	function closeSettings(open: boolean) {
@@ -259,10 +337,7 @@ export function AccountScreen({
 						type="button"
 						className="button button-top-up"
 						onClick={topUp}
-						disabled={
-							!wallet ||
-							(preferences.activeChain !== "SOLANA" && !fundingWallet)
-						}
+						disabled={!wallet}
 					>
 						Top up <ArrowDownToLine aria-hidden="true" />
 					</button>
@@ -303,6 +378,13 @@ export function AccountScreen({
 									</div>
 								</div>
 								<div className="account-top-up-wallet">
+									{depositQrCode ? (
+										<img
+											className="account-top-up-qr"
+											src={depositQrCode}
+											alt="QR code for the Invest4.fun Solana deposit address"
+										/>
+									) : null}
 									<span>Deposit address</span>
 									<code>{wallet}</code>
 									<button
@@ -322,7 +404,95 @@ export function AccountScreen({
 									</button>
 								</div>
 							</section>
+							<section className="account-top-up-provider funding-transfer-panel">
+								<div className="account-top-up-provider-heading">
+									<span className="account-top-up-provider-icon" aria-hidden="true">
+										<Wallet />
+									</span>
+									<div>
+										<strong>Transfer from external wallet</strong>
+										<small>
+											{fundingWallet
+												? shortAddress(fundingWallet.address)
+												: "Connect an existing Solana wallet first."}
+										</small>
+									</div>
+								</div>
+								{fundingWallet ? (
+									<div className="funding-transfer-actions">
+										<label>
+											<span>Deposit USDC</span>
+											<input
+												type="number"
+												min="0.1"
+												step="0.01"
+												value={usdcFundingAmount}
+												onChange={(event) => setUsdcFundingAmount(event.target.value)}
+											/>
+											<button
+												type="button"
+												className="button button-primary"
+												onClick={() => void fundFromExternalWallet("USDC")}
+												disabled={Boolean(fundingAction)}
+											>
+												{fundingAction === "USDC" ? "Sending…" : "Send USDC"}
+											</button>
+										</label>
+										<label>
+											<span>Add SOL for network fees</span>
+											<input
+												type="number"
+												min="0.001"
+												step="0.001"
+												value={solFundingAmount}
+												onChange={(event) => setSolFundingAmount(event.target.value)}
+											/>
+											<button
+												type="button"
+												className="button button-outline"
+												onClick={() => void fundFromExternalWallet("SOL")}
+												disabled={Boolean(fundingAction)}
+											>
+												{fundingAction === "SOL" ? "Sending…" : "Send SOL"}
+											</button>
+										</label>
+									</div>
+								) : (
+									<button
+										type="button"
+										className="button button-outline"
+										onClick={onConnectExternalWallet}
+									>
+										Connect Solana wallet
+									</button>
+								)}
+							</section>
 						</div>
+						<div className="funding-balance-status">
+							<span>
+								{balance === undefined ? "—" : `${formatInvestingBalance(balance)} USDC`}
+							</span>
+							<span>
+								{solBalance === undefined ? "—" : `${formatAccountBalance(solBalance)} SOL`}
+							</span>
+							<button
+								type="button"
+								className="button button-outline"
+								onClick={() => void refreshBalance()}
+							>
+								Refresh balance <RefreshCw aria-hidden="true" />
+							</button>
+						</div>
+						{fundingStatus ? (
+							<p className="funding-status" role="status">
+								{fundingStatus}
+							</p>
+						) : null}
+						{fundingError ? (
+							<p className="error-message" role="alert">
+								{fundingError}
+							</p>
+						) : null}
 						<p className="account-top-up-note">
 							<Info aria-hidden="true" />
 							<span>

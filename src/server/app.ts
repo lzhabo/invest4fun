@@ -14,6 +14,7 @@ import { sha256 } from "../domain/canonical.js";
 import {
 	AI_RANKING_POOL_SIZE,
 	FEED_PAGE_SIZE,
+	ONBOARDING_VERSION,
 	POLICY_VERSION,
 } from "../domain/constants.js";
 import { executionIntent } from "../domain/execution-intent.js";
@@ -488,6 +489,44 @@ export function createApp(deps: AppDependencies) {
 		if (byOwner || ownerId === response.locals.wallet) return byOwner;
 		return deps.store.getPreferences(response.locals.wallet);
 	};
+	const timezoneSchema = z.string().min(1).max(100).refine((timezone) => {
+		try {
+			Intl.DateTimeFormat("en", { timeZone: timezone });
+			return true;
+		} catch {
+			return false;
+		}
+	}, "Invalid IANA timezone");
+
+	app.post(
+		"/api/account/bootstrap",
+		requireWallet,
+		async (request, response) => {
+			const timezone = timezoneSchema.parse(request.body?.timezone);
+			try {
+				response.json(
+					await deps.store.getOrCreateAccount(
+						preferenceOwner(response),
+						response.locals.wallet,
+						timezone,
+					),
+				);
+			} catch (error) {
+				if (
+					error instanceof Error &&
+					error.message === "CANONICAL_WALLET_MISMATCH"
+				) {
+					response.status(409).json({
+						error: "CANONICAL_WALLET_MISMATCH",
+						message:
+							"Your investment wallet changed. Reconnect the original wallet or start account recovery.",
+					});
+					return;
+				}
+				throw error;
+			}
+		},
+	);
 
 	app.post("/api/preferences", requireWallet, async (request, response) => {
 		const preferences = onboardingPreferencesSchema.parse(request.body);
@@ -528,13 +567,17 @@ export function createApp(deps: AppDependencies) {
 		) {
 			await deps.store.invalidatePreparedExecutions(ownerId);
 		}
-		response.json(
-			await deps.store.setPreferences(
-				ownerId,
-				storedPreferences,
-				response.locals.wallet,
-			),
+		const saved = await deps.store.setPreferences(
+			ownerId,
+			storedPreferences,
+			response.locals.wallet,
 		);
+		await deps.store.completeAccountOnboarding(
+			ownerId,
+			response.locals.wallet,
+			ONBOARDING_VERSION,
+		);
+		response.json(saved);
 	});
 
 	app.get("/api/preferences", requireWallet, async (_request, response) => {
@@ -553,10 +596,8 @@ export function createApp(deps: AppDependencies) {
 			const cadence = personalizationPreferencesSchema.shape.cadence.parse(
 				request.body?.cadence,
 			);
-			// Demo and local-live are intentionally repeatable so a builder can sign
-			// multiple test baskets during one cadence period. Production stays
-			// idempotent per wallet and epoch at the StateStore boundary.
 			const storedPreferences = await preferencesFor(response);
+			const account = await deps.store.getAccount(preferenceOwner(response));
 			const chain =
 				storedPreferences?.activeChain ??
 				appChainSchema
@@ -584,7 +625,12 @@ export function createApp(deps: AppDependencies) {
 					.parse(request.body?.feedRankingProvider);
 			const session = await deps.store.openSession(
 				response.locals.wallet,
-				sessionEpochId(cadence, deps.config),
+				sessionEpochId(
+					cadence,
+					deps.config,
+					undefined,
+					account?.timezone ?? "UTC",
+				),
 				executionProvider,
 				chain,
 				preferenceOwner(response),
@@ -834,6 +880,29 @@ export function createApp(deps: AppDependencies) {
 		},
 	);
 
+	app.get(
+		"/api/sessions/:sessionId/budget",
+		requireFeedWallet,
+		async (request, response) => {
+			const session = await deps.store.getSession(String(request.params.sessionId));
+			if (
+				!session ||
+				session.wallet !== response.locals.wallet ||
+				session.ownerId.toLowerCase() !== preferenceOwner(response).toLowerCase()
+			) {
+				response.status(404).json({ error: "SESSION_NOT_FOUND" });
+				return;
+			}
+			response.json({
+				epochId: session.epochId,
+				usedBaseUnits: await deps.store.getPeriodBudgetUsage(
+					session.ownerId,
+					session.epochId,
+				),
+			});
+		},
+	);
+
 	app.post(
 		"/api/executions/prepare",
 		requireWallet,
@@ -851,6 +920,17 @@ export function createApp(deps: AppDependencies) {
 				return;
 			}
 			const currentPreferences = await preferencesFor(response);
+			if (
+				currentPreferences &&
+				parsed.periodLimitUsd !== currentPreferences.periodLimitUsd
+			) {
+				response.status(409).json({
+					error: "PERIOD_LIMIT_CHANGED",
+					message:
+						"Your weekly investment limit changed. Refresh the basket before continuing.",
+				});
+				return;
+			}
 			if (
 				currentPreferences &&
 				(currentPreferences.executionProvider !== session.executionProvider ||
@@ -1024,11 +1104,16 @@ export function createApp(deps: AppDependencies) {
 			};
 			const execution = session.executionId
 				? await deps.store.refreshPreparedExecution(
-						session.executionId,
-						expectedPlanHash,
+							session.executionId,
+							expectedPlanHash,
+							plan,
+							budgetForTicket(0.1, parsed.periodLimitUsd).periodBudgetBaseUnits,
+						)
+				: await deps.store.reserveExecution(
+						session.id,
 						plan,
-					)
-				: await deps.store.reserveExecution(session.id, plan);
+						budgetForTicket(0.1, parsed.periodLimitUsd).periodBudgetBaseUnits,
+					);
 			timing.mark("store");
 			timing.apply(response);
 			response.json({
@@ -1353,6 +1438,14 @@ export function createApp(deps: AppDependencies) {
 				response
 					.status(422)
 					.json({ error: error.code, message: error.message });
+				return;
+			}
+			if (error instanceof Error && error.message === "PERIOD_BUDGET_EXCEEDED") {
+				response.status(422).json({
+					error: "PERIOD_BUDGET_EXCEEDED",
+					message:
+						"This basket would exceed your weekly investment limit. Reduce the basket or wait for the next weekly period.",
+				});
 				return;
 			}
 			console.error(

@@ -150,6 +150,7 @@ export function ReceiptScreen({
 					return (
 						<div className="receipt-row" key={candidate.assetId}>
 							<AssetMark
+								assetId={candidate.assetId}
 								symbol={candidate.symbol}
 								iconUrl={candidate.iconUrl}
 								size="sm"

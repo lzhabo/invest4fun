@@ -32,19 +32,24 @@ import {
 	type PublicConfig,
 	type WeeklySession,
 } from "./api";
+import { resolveAccountBootstrap } from "./account-bootstrap";
 import { feedBasketSelections } from "./basket-selections";
 import { AccountScreen } from "./components/AccountScreen";
 import { AppShell } from "./components/AppShell";
 import { AssetIconProvider } from "./components/AssetMark";
 import { BudgetRail } from "./components/BudgetRail";
 import { FeedCardSkeleton } from "./components/FeedCardSkeleton";
+import { AppBootstrapSkeleton } from "./components/PageSkeletons";
 import { Confetti } from "./components/magicui/confetti";
 import { Onboarding } from "./components/Onboarding";
 import { PositionsScreen } from "./components/PositionsScreen";
 import { ReceiptScreen } from "./components/ReceiptScreen";
 import { ReviewScreen } from "./components/ReviewScreen";
 import { SwipeCard } from "./components/SwipeCard";
+import { openFeedSession } from "./feed-session";
+import { mergeRefreshedFeed } from "./feed-refresh";
 import {
+	readAccountPreferences,
 	removeLegacyPreferences,
 	writeAccountPreferences,
 } from "./preferences-storage";
@@ -64,7 +69,7 @@ import {
 } from "./view-routing";
 
 type View = PrimaryView | "receipts";
-type Stage = "loading" | "onboarding" | "swipe" | "review";
+type Stage = "bootstrapping" | "loading" | "onboarding" | "swipe" | "review";
 type DecisionFeedback = "invest" | "skip";
 const LAST_EXECUTION_KEY = "investmade:last-execution";
 const LAST_EXECUTION_CANDIDATES_KEY = "investmade:last-execution-candidates";
@@ -131,6 +136,7 @@ export function App({ config }: { config: PublicConfig }) {
 		getAccessToken,
 		linkWallet,
 		login,
+		logout,
 		ready: privyReady,
 		user,
 	} = usePrivy();
@@ -138,7 +144,15 @@ export function App({ config }: { config: PublicConfig }) {
 	const [view, setView] = useState<View>(
 		() => primaryViewFromPathname(window.location.pathname) ?? "week",
 	);
-	const [stage, setStage] = useState<Stage>("onboarding");
+	const [stage, setStage] = useState<Stage>("bootstrapping");
+	const [bootstrapIssue, setBootstrapIssue] = useState<
+		| {
+				state: "reauthenticate" | "unavailable";
+				message: string;
+				hasCachedPreferences: boolean;
+		  }
+		| undefined
+	>();
 	const [onboardingChain, setOnboardingChain] = useState<"SOLANA">("SOLANA");
 	const [session, setSession] = useState<WeeklySession>();
 	const [feed, setFeed] = useState<FeedResponse>();
@@ -147,21 +161,21 @@ export function App({ config }: { config: PublicConfig }) {
 	const [index, setIndex] = useState(0);
 	const [selectedIds, setSelectedIds] = useState<string[]>([]);
 	const [feedTicketSizeUsd, setFeedTicketSizeUsd] = useState<number>();
+	const [periodUsedUsd, setPeriodUsedUsd] = useState(0);
 	const [assetInfoOpen, setAssetInfoOpen] = useState(false);
 	const [settlement, setSettlement] = useState<ExecutionRecord>();
 	const [receiptCandidates, setReceiptCandidates] = useState<Candidate[]>([]);
 	const [error, setError] = useState("");
 	const [decisionFeedback, setDecisionFeedback] = useState<DecisionFeedback>();
 	const [loadingMore, setLoadingMore] = useState(false);
+	const [loadMoreError, setLoadMoreError] = useState("");
 	const [feedExhausted, setFeedExhausted] = useState(false);
+	const [feedUpdatedAt, setFeedUpdatedAt] = useState<number>();
+	const [feedClock, setFeedClock] = useState(() => Date.now());
+	const [refreshingFeed, setRefreshingFeed] = useState(false);
+	const [refreshFeedError, setRefreshFeedError] = useState("");
 	const decisionTimer = useRef<number | undefined>(undefined);
-	const prefetchedFeed = useRef<
-		| {
-				key: string;
-				result: Promise<FeedResponse | undefined>;
-		  }
-		| undefined
-	>(undefined);
+	const bootstrapRequestId = useRef(0);
 	const warningsByAssetId = useRef(new Map<string, string[]>());
 	const activeChain = preferences?.activeChain ?? "SOLANA";
 	const shellChain = stage === "onboarding" ? onboardingChain : activeChain;
@@ -185,7 +199,6 @@ export function App({ config }: { config: PublicConfig }) {
 		selectedSolanaWallet,
 	);
 	const wallet = selectedSolanaWallet?.address ?? "";
-	const fundingWalletAddress = externalSolanaWallet?.address ?? "";
 	const displayWallet = wallet;
 	const walletConnectionRequired = !authenticated || !selectedSolanaWallet;
 	const connectWallet = useCallback(() => {
@@ -272,7 +285,10 @@ export function App({ config }: { config: PublicConfig }) {
 	}, [wallet]);
 
 	const loadSession = useCallback(
-		async (preferences: OnboardingPreferences) => {
+		async (
+			preferences: OnboardingPreferences,
+			options: { persistPreferences?: boolean } = {},
+		) => {
 			const sessionSolanaWallet = selectedSolanaWallet;
 			const sessionWallet = sessionSolanaWallet?.address;
 			configureApiAuth({
@@ -281,10 +297,6 @@ export function App({ config }: { config: PublicConfig }) {
 				getTxOriginAddress: () => sessionSolanaWallet?.address,
 				getWalletChain: () => "SOLANA",
 			});
-			const prefetch = prefetchedFeed.current;
-			const minimumLoader = new Promise((resolve) =>
-				window.setTimeout(resolve, 1000),
-			);
 			setError("");
 			setView(primaryViewFromPathname(window.location.pathname) ?? "week");
 			setStage("loading");
@@ -294,25 +306,27 @@ export function App({ config }: { config: PublicConfig }) {
 			setIndex(0);
 			setSelectedIds([]);
 			setFeedTicketSizeUsd(undefined);
+			setPeriodUsedUsd(0);
+			setLoadMoreError("");
 			setFeedExhausted(false);
 			try {
-				if (authenticated) await api.savePreferences(preferences);
-				const [opened, prefetched] = await Promise.all([
-					api.openSession(
-						preferences.cadence,
-						preferences.executionProvider,
-						preferences.activeChain,
-						preferences.feedRankingProvider,
-					),
-					prefetch?.key === JSON.stringify(preferences)
-						? prefetch.result
-						: undefined,
-				]);
-				const generated =
-					prefetched ?? (await generateFeedWithRetry(opened.id, preferences));
-				await minimumLoader;
-				prefetchedFeed.current = undefined;
+				const { session: opened, feed: generated } = await openFeedSession({
+					preferences,
+					persistPreferences:
+						authenticated && options.persistPreferences !== false,
+					savePreferences: api.savePreferences,
+					openSession: (plan) =>
+						api.openSession(
+							plan.cadence,
+							plan.executionProvider,
+							plan.activeChain,
+							plan.feedRankingProvider,
+						),
+					generateFeed: generateFeedWithRetry,
+				});
 				rememberWarnings(warningsByAssetId.current, generated);
+				const budgetUsage = await api.sessionBudget(opened.id);
+				setPeriodUsedUsd(Number(budgetUsage.usedBaseUnits) / 1_000_000);
 				setSession(opened);
 				setFeed({
 					...generated,
@@ -320,6 +334,8 @@ export function App({ config }: { config: PublicConfig }) {
 				});
 				setIndex(0);
 				setSelectedIds([]);
+				setFeedUpdatedAt(Date.now());
+				setFeedClock(Date.now());
 				setFeedExhausted(false);
 				if (window.location.pathname === "/") {
 					window.history.replaceState(
@@ -331,7 +347,6 @@ export function App({ config }: { config: PublicConfig }) {
 				scrollToTop();
 				setStage("swipe");
 			} catch (caught) {
-				await minimumLoader;
 				setError(
 					caught instanceof Error ? caught.message : "Could not open session",
 				);
@@ -346,22 +361,62 @@ export function App({ config }: { config: PublicConfig }) {
 		],
 	);
 
-	const prefetchFeed = useCallback((preferences: OnboardingPreferences) => {
-		const key = JSON.stringify(preferences);
-		if (prefetchedFeed.current?.key === key) return;
-		prefetchedFeed.current = {
-			key,
-			result: api
-				.openSession(
-					preferences.cadence,
-					preferences.executionProvider,
-					preferences.activeChain,
-					preferences.feedRankingProvider,
-				)
-				.then((opened) => api.generateFeed(opened.id, preferences))
-				.catch(() => undefined),
-		};
-	}, []);
+	const bootstrapAccount = useCallback(async () => {
+		if (!privyReady) return;
+		if (!authenticated) {
+			bootstrapRequestId.current += 1;
+			setBootstrapIssue(undefined);
+			setStage("onboarding");
+			return;
+		}
+		if (!solanaWalletsReady || !user?.id || !selectedSolanaWallet) return;
+
+		const requestId = bootstrapRequestId.current + 1;
+		bootstrapRequestId.current = requestId;
+		setBootstrapIssue(undefined);
+		setStage("bootstrapping");
+		const result = await resolveAccountBootstrap({
+			ensureAccount: () =>
+				api.accountBootstrap(
+					Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+				),
+			loadPreferences: api.preferences,
+			readCachedPreferences: () => readAccountPreferences(user.id),
+		});
+		if (bootstrapRequestId.current !== requestId) return;
+		if (result.state === "new") {
+			setStage("onboarding");
+			return;
+		}
+		if (result.state === "returning") {
+			writeAccountPreferences(user.id, result.preferences);
+			await loadSession(result.preferences, { persistPreferences: false });
+			return;
+		}
+		setBootstrapIssue({
+			state: result.state,
+			message:
+				result.state === "reauthenticate"
+					? "Your session expired. Sign in again to continue."
+					: result.error instanceof Error
+						? result.error.message
+						: "Could not load your investment plan.",
+			hasCachedPreferences: Boolean(
+				result.state === "unavailable" && result.cachedPreferences,
+			),
+		});
+	}, [
+		authenticated,
+		loadSession,
+		privyReady,
+		selectedSolanaWallet,
+		solanaWalletsReady,
+		user?.id,
+	]);
+
+	useEffect(() => {
+		void bootstrapAccount();
+	}, [bootstrapAccount]);
 
 	useEffect(() => {
 		if (authenticated && user?.id && preferences) {
@@ -384,7 +439,10 @@ export function App({ config }: { config: PublicConfig }) {
 		setReceiptCandidates([]);
 		setError("");
 		setDecisionFeedback(undefined);
+		setLoadMoreError("");
 		setFeedExhausted(false);
+		setFeedUpdatedAt(undefined);
+		setRefreshFeedError("");
 	}, [authenticated, privyReady]);
 
 	useEffect(
@@ -413,6 +471,7 @@ export function App({ config }: { config: PublicConfig }) {
 	const ticketSizeUsd =
 		feedTicketSizeUsd ?? preferences?.ticketSizeUsd ?? 10;
 	const periodLimitUsd = preferences?.periodLimitUsd ?? 100;
+	const availablePeriodBudgetUsd = Math.max(0, periodLimitUsd - periodUsedUsd);
 	const feedBasketTotalUsd = selected.length * ticketSizeUsd;
 	const feedExecutionSelections = useMemo(
 		() => feedBasketSelections(selected, ticketSizeUsd),
@@ -423,10 +482,21 @@ export function App({ config }: { config: PublicConfig }) {
 		({ candidate }) => candidate,
 	);
 	const stableToken = "USDC";
-	const canAddCurrent = feedBasketTotalUsd + ticketSizeUsd <= periodLimitUsd;
+	const feedAgeMinutes = feedUpdatedAt
+		? Math.max(0, Math.floor((feedClock - feedUpdatedAt) / 60_000))
+		: 0;
+	const canAddCurrent =
+		selected.length < 10 &&
+		feedBasketTotalUsd + ticketSizeUsd <= availablePeriodBudgetUsd;
 	const addCurrentLabel = canAddCurrent
 		? `Add ${ticketSizeUsd} ${stableToken}`
 		: "Low balance";
+
+	useEffect(() => {
+		if (!feedUpdatedAt) return;
+		const timer = window.setInterval(() => setFeedClock(Date.now()), 60_000);
+		return () => window.clearInterval(timer);
+	}, [feedUpdatedAt]);
 
 	useEffect(() => {
 		if (!nextAssetId) return;
@@ -459,10 +529,51 @@ export function App({ config }: { config: PublicConfig }) {
 		return { sessionId: opened.id, assetIds };
 	}, [executionSelections, preferences]);
 
+	const refreshFeed = useCallback(async () => {
+		if (!preferences || !feed || refreshingFeed) return;
+		setRefreshingFeed(true);
+		setRefreshFeedError("");
+		try {
+			const { session: opened, feed: generated } = await openFeedSession({
+				preferences,
+				persistPreferences: false,
+				savePreferences: api.savePreferences,
+				openSession: (plan) =>
+					api.openSession(
+						plan.cadence,
+						plan.executionProvider,
+						plan.activeChain,
+						plan.feedRankingProvider,
+					),
+				generateFeed: (sessionId, plan) =>
+					api.generateFeed(sessionId, plan, selectedIds),
+			});
+			rememberWarnings(warningsByAssetId.current, generated);
+			const shuffled = {
+				...generated,
+				candidates: shuffledFeedPage(generated.candidates, opened, 0),
+			};
+			setSession(opened);
+			setFeed(mergeRefreshedFeed(feed, shuffled, selectedIds));
+			setIndex(selectedIds.length);
+			setFeedExhausted(false);
+			setLoadMoreError("");
+			setFeedUpdatedAt(Date.now());
+			setFeedClock(Date.now());
+		} catch (caught) {
+			setRefreshFeedError(
+				caught instanceof Error ? caught.message : "Could not refresh the feed.",
+			);
+		} finally {
+			setRefreshingFeed(false);
+		}
+	}, [feed, preferences, refreshingFeed, selectedIds]);
+
 	const loadMoreCandidates = useCallback(async () => {
 		if (!feed || !preferences || !session || loadingMore || feedExhausted)
 			return;
 		setLoadingMore(true);
+		setLoadMoreError("");
 		try {
 			const next = await api.generateFeed(
 				session.id,
@@ -496,11 +607,17 @@ export function App({ config }: { config: PublicConfig }) {
 		} catch (caught) {
 			if (
 				caught instanceof ApiError &&
-				caught.code !== "NO_ELIGIBLE_CANDIDATES_FOR_PREFERENCES"
+				caught.code === "NO_ELIGIBLE_CANDIDATES_FOR_PREFERENCES"
 			) {
+				setFeedExhausted(true);
+			} else {
 				console.error("Could not load the next feed page", caught);
+				setLoadMoreError(
+					caught instanceof Error
+						? caught.message
+						: "Could not load more assets.",
+				);
 			}
-			setFeedExhausted(true);
 		} finally {
 			setLoadingMore(false);
 		}
@@ -510,6 +627,7 @@ export function App({ config }: { config: PublicConfig }) {
 		if (
 			!feed?.hasMore ||
 			feedExhausted ||
+			loadMoreError ||
 			loadingMore ||
 			!shouldPrefetchNextFeed(index, candidates.length)
 		) {
@@ -521,6 +639,7 @@ export function App({ config }: { config: PublicConfig }) {
 		feed,
 		feedExhausted,
 		index,
+		loadMoreError,
 		loadMoreCandidates,
 		loadingMore,
 	]);
@@ -596,7 +715,6 @@ export function App({ config }: { config: PublicConfig }) {
 				solanaExecutionWallet:
 					solanaWallet?.address ?? preferences.solanaExecutionWallet,
 			};
-			prefetchedFeed.current = undefined;
 			setSettlement(undefined);
 			setSelectedIds([]);
 			setFeed(undefined);
@@ -616,6 +734,35 @@ export function App({ config }: { config: PublicConfig }) {
 			preferences,
 		],
 	);
+
+	if (stage === "bootstrapping") {
+		if (!bootstrapIssue) return <AppBootstrapSkeleton />;
+		return (
+			<main className="fatal-state account-bootstrap-error">
+				<h1>
+					{bootstrapIssue.state === "reauthenticate"
+						? "Sign in again"
+						: "Your plan is temporarily unavailable"}
+				</h1>
+				<p>{bootstrapIssue.message}</p>
+				{bootstrapIssue.hasCachedPreferences ? (
+					<p>Your saved browser copy is safe and was not overwritten.</p>
+				) : null}
+				<button
+					type="button"
+					onClick={() => {
+						if (bootstrapIssue.state === "reauthenticate") {
+							void logout();
+							return;
+						}
+						void bootstrapAccount();
+					}}
+				>
+					{bootstrapIssue.state === "reauthenticate" ? "Sign in" : "Try again"}
+				</button>
+			</main>
+		);
+	}
 
 	return (
 		<AssetIconProvider>
@@ -665,7 +812,6 @@ export function App({ config }: { config: PublicConfig }) {
 					<Onboarding
 						config={config}
 						onComplete={loadSession}
-						onPrefetch={prefetchFeed}
 						privyReady={privyReady}
 						onChainPreview={setOnboardingChain}
 					/>
@@ -712,7 +858,7 @@ export function App({ config }: { config: PublicConfig }) {
 				) : view === "account" && preferences ? (
 					<AccountScreen
 						wallet={wallet}
-						fundingWallet={fundingWalletAddress}
+						fundingWallet={externalSolanaWallet}
 						preferences={preferences}
 						theme={themeSettings[activeChain]}
 						executionProviders={config.executionProviders}
@@ -725,7 +871,6 @@ export function App({ config }: { config: PublicConfig }) {
 						}
 						onSave={async (next) => {
 							if (user?.id) writeAccountPreferences(user.id, next);
-							prefetchedFeed.current = undefined;
 							setSettlement(undefined);
 							navigate("week");
 							await loadSession(next);
@@ -798,10 +943,34 @@ export function App({ config }: { config: PublicConfig }) {
 				) : (
 					<main className="swipe-page">
 						<section className="swipe-workspace">
-							<header className="page-heading">
-								<h1>Build your basket</h1>
-								<p>Swipe right to add left to skip.</p>
+							<header className="page-heading feed-page-heading">
+								<div>
+									<h1>Build your basket</h1>
+									<p>Swipe right to add left to skip.</p>
+								</div>
+								{feed ? (
+									<div className="feed-refresh-control">
+										<small>
+											{feedAgeMinutes === 0
+												? "Updated just now"
+												: `Updated ${feedAgeMinutes} min ago`}
+										</small>
+										<button
+											type="button"
+											className="button button-outline"
+											onClick={() => void refreshFeed()}
+											disabled={refreshingFeed}
+										>
+											{refreshingFeed ? "Refreshing…" : "Refresh feed"}
+										</button>
+									</div>
+								) : null}
 							</header>
+							{refreshFeedError ? (
+								<div className="error-message" role="alert">
+									{refreshFeedError}
+								</div>
+							) : null}
 							{error ? (
 								<div className="fatal-state">
 									<h2>Session unavailable</h2>
@@ -911,6 +1080,14 @@ export function App({ config }: { config: PublicConfig }) {
 									message="Finding more assets…"
 									detail="Your selected basket stays ready to review."
 								/>
+							) : loadMoreError ? (
+								<div className="fatal-state">
+									<h2>Could not load more assets</h2>
+									<p>{loadMoreError}</p>
+									<button type="button" onClick={() => void loadMoreCandidates()}>
+										Try again
+									</button>
+								</div>
 							) : (
 								<div className="feed-complete">
 									{selected.length ? (
@@ -943,6 +1120,14 @@ export function App({ config }: { config: PublicConfig }) {
 									>
 										Review basket ({selected.length}) <BaggageClaim />
 									</button>
+									<button
+										type="button"
+										className="button button-outline"
+										onClick={() => void refreshFeed()}
+										disabled={refreshingFeed}
+									>
+										Refresh feed
+									</button>
 								</div>
 							)}
 						</section>
@@ -950,7 +1135,7 @@ export function App({ config }: { config: PublicConfig }) {
 							selected={selected}
 							onRemove={removeFeedAsset}
 							ticketSizeUsd={ticketSizeUsd}
-							periodLimitUsd={periodLimitUsd}
+							periodLimitUsd={availablePeriodBudgetUsd}
 						/>
 					</main>
 				)}

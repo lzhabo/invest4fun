@@ -184,18 +184,13 @@ export class JupiterProvider implements ExecutionProvider, CandidateProvider {
 	}
 
 	async getCandidatesForFeed(
-		wallet: string,
+		_wallet: string,
 		rankedAssetIds: string[],
-		amountInBaseUnits: string,
-		now: Date,
+		_amountInBaseUnits: string,
+		_now: Date,
 		limit: number,
 	): Promise<Candidate[]> {
-		return this.resolveCandidates(
-			wallet,
-			rankedAssetIds.slice(0, limit),
-			amountInBaseUnits,
-			now,
-		);
+		return this.getCandidatesForDisplay(rankedAssetIds.slice(0, limit));
 	}
 
 	async getCandidates(
@@ -1102,10 +1097,9 @@ function candidateFromAsset(
 			1,
 			Math.min(10_000, Math.round((metadata.organicScore ?? 50) * 100)),
 		),
-		reason: `${asset.name} passed Jupiter token checks and has an executable USDC route.`,
+		reason: `${asset.name} passed Jupiter token and market checks. A fresh USDC route is verified at review.`,
 		evidenceIds: [
 			`jupiter:token:${asset.address}`,
-			`jupiter:route:${asset.address}`,
 		],
 	};
 }

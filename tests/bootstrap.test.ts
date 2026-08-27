@@ -27,6 +27,31 @@ describe("runtime composition", () => {
 		vi.unstubAllGlobals();
 	});
 
+	it("bootstraps one product account for the authenticated Privy identity", async () => {
+		vi.stubEnv("NODE_ENV", "test");
+		vi.stubEnv("INVESTMADE_DEMO_MODE", "true");
+		vi.stubEnv("LOCAL_LIVE_EXECUTION", "false");
+		vi.stubEnv("PUBLIC_ORIGIN", "http://localhost:5173");
+		vi.stubEnv(
+			"SESSION_SECRET",
+			"test-secret-that-is-at-least-32-characters",
+		);
+		vi.stubEnv("PRIVY_APP_ID", "test-privy-app-id");
+		vi.stubEnv("PRIVY_APP_SECRET", "test-privy-app-secret");
+
+		const response = await request(createServerApp())
+			.post("/api/account/bootstrap")
+			.set(authenticatedSolana)
+			.send({ timezone: "Europe/Lisbon" })
+			.expect(200);
+
+		expect(response.body).toMatchObject({
+			canonicalSolanaWallet: "11111111111111111111111111111111",
+			timezone: "Europe/Lisbon",
+			onboardingVersion: 0,
+		});
+	});
+
 	it("keeps the Solana demo feed offline even when provider keys are configured", async () => {
 		vi.stubEnv("NODE_ENV", "test");
 		vi.stubEnv("INVESTMADE_DEMO_MODE", "true");

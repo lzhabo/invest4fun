@@ -503,6 +503,7 @@ export function ReviewScreen({
 							<div className="ledger-row" key={candidate.assetId}>
 								<span className="ledger-asset">
 									<AssetMark
+										assetId={candidate.assetId}
 										symbol={candidate.symbol}
 										iconUrl={candidate.iconUrl}
 										size="sm"

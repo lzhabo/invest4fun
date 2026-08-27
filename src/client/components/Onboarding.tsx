@@ -6,10 +6,9 @@ import {
 	isTicketSizeUsd,
 	type OnboardingPreferences,
 } from "../../domain/schemas";
-import { api, type PublicConfig } from "../api";
+import type { PublicConfig } from "../api";
+import { newAccountDraft } from "../onboarding-defaults";
 import {
-	readAccountPreferences,
-	solanaOnlyPreferences,
 	removeAccountPreferences,
 	writeAccountPreferences,
 } from "../preferences-storage";
@@ -158,13 +157,11 @@ const ASSET_OPTIONS: Array<{
 export function Onboarding({
 	config,
 	onComplete,
-	onPrefetch,
 	privyReady,
 	onChainPreview,
 }: {
 	config: PublicConfig;
 	onComplete: (preferences: OnboardingPreferences) => void | Promise<void>;
-	onPrefetch: (preferences: OnboardingPreferences) => void;
 	privyReady: boolean;
 	onChainPreview: (chain: "SOLANA") => void;
 }) {
@@ -172,12 +169,11 @@ export function Onboarding({
 	const { wallets: solanaWallets, ready: solanaWalletsReady } =
 		useSolanaWallets();
 	const [step, setStep] = useState<Step>("welcome");
-	const [draft, setDraft] = useState<PreferenceDraft>(emptyDraft);
+	const [draft, setDraft] = useState<PreferenceDraft>(newAccountDraft);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState("");
 	const completingDemo = useRef(false);
 	const pendingPlan = useRef(false);
-	const hydratedUserId = useRef<string | undefined>(undefined);
 	const completedPreferences = toCompletedPreferences(draft);
 	const preferredSolanaWallet = findEmbeddedSolanaWallet(
 		solanaWallets,
@@ -187,30 +183,6 @@ export function Onboarding({
 	useEffect(() => {
 		onChainPreview(draft.activeChain);
 	}, [draft.activeChain, onChainPreview]);
-
-	useEffect(() => {
-		const userId = authenticated ? user?.id : undefined;
-		if (!userId || pendingPlan.current || hydratedUserId.current === userId)
-			return;
-		hydratedUserId.current = userId;
-		let cancelled = false;
-		api
-			.preferences()
-			.catch(() => readAccountPreferences(userId))
-			.then((storedPreferences) => {
-				if (cancelled) return;
-				const currentPreferences = storedPreferences
-					? solanaOnlyPreferences(storedPreferences)
-					: defaultSignedInPreferences();
-				setDraft(
-					draftFromPreferences(currentPreferences),
-				);
-				setStep("wallet");
-			});
-		return () => {
-			cancelled = true;
-		};
-	}, [authenticated, user?.id]);
 
 	useEffect(() => {
 		if (step === "welcome") return;
@@ -277,7 +249,6 @@ export function Onboarding({
 		pendingPlan.current = true;
 		if (authenticated && user?.id)
 			writeAccountPreferences(user.id, preferences);
-		if (config.executionMode !== "live") onPrefetch(preferences);
 		setStep("wallet");
 	}
 
@@ -285,8 +256,7 @@ export function Onboarding({
 		if (authenticated && user?.id) removeAccountPreferences(user.id);
 		completingDemo.current = false;
 		pendingPlan.current = false;
-		hydratedUserId.current = authenticated ? user?.id : undefined;
-		setDraft(emptyDraft());
+		setDraft(newAccountDraft());
 		setStep("welcome");
 		requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "auto" }));
 	}
@@ -876,12 +846,6 @@ function assetClassesFrom(
 	return [];
 }
 
-function assetChoiceFrom(
-	assetClasses: OnboardingPreferences["assetClasses"],
-): AssetChoice {
-	return assetClasses.length === 2 ? "BOTH" : (assetClasses[0] ?? "BOTH");
-}
-
 function toCompletedPreferences(
 	draft: PreferenceDraft,
 ): OnboardingPreferences | undefined {
@@ -927,63 +891,8 @@ function toPreviewPreferences(draft: PreferenceDraft): OnboardingPreferences {
 	};
 }
 
-function emptyDraft(): PreferenceDraft {
-	return {
-		activeChain: "SOLANA",
-		executionProvider: "JUPITER",
-		feedRankingProvider: "DETERMINISTIC",
-		customPeriodLimitInput: "",
-		customTicketInput: "",
-		riskDisclosureAccepted: false,
-	};
-}
-
-function defaultSignedInPreferences(): OnboardingPreferences {
-	return {
-		activeChain: "SOLANA",
-		executionProvider: "JUPITER",
-		feedRankingProvider: "DETERMINISTIC",
-		cadence: "weekly",
-		periodLimitUsd: 100,
-		ticketSizeUsd: 10,
-		riskMode: "balanced",
-		assetClasses: ["CRYPTO"],
-		riskDisclosureAccepted: true,
-	};
-}
-
 function defaultFeedRankingProvider(): OnboardingPreferences["feedRankingProvider"] {
 	return "DETERMINISTIC";
-}
-
-function draftFromPreferences(
-	preferences: OnboardingPreferences,
-): PreferenceDraft {
-	return {
-		executionProvider: preferences.executionProvider,
-		feedRankingProvider: preferences.feedRankingProvider,
-		activeChain: preferences.activeChain,
-		cadence: preferences.cadence,
-		periodLimitUsd: preferences.periodLimitUsd ?? 100,
-		periodLimitChoice: isPresetPeriodLimit(preferences.periodLimitUsd ?? 100)
-			? ((preferences.periodLimitUsd ?? 100) as 10 | 50 | 100)
-			: "custom",
-		customPeriodLimitInput: isPresetPeriodLimit(
-			preferences.periodLimitUsd ?? 100,
-		)
-			? ""
-			: String(preferences.periodLimitUsd),
-		ticketSizeUsd: preferences.ticketSizeUsd,
-		ticketChoice: isPresetTicket(preferences.ticketSizeUsd)
-			? preferences.ticketSizeUsd
-			: "custom",
-		customTicketInput: isPresetTicket(preferences.ticketSizeUsd)
-			? ""
-			: String(preferences.ticketSizeUsd),
-		riskMode: preferences.riskMode,
-		assetChoice: assetChoiceFrom(preferences.assetClasses),
-		riskDisclosureAccepted: true,
-	};
 }
 
 function customTicket(value: string): number | undefined {
@@ -998,13 +907,6 @@ function customPeriodLimit(value: string): number | undefined {
 	return isPeriodLimitUsd(rounded) ? rounded : undefined;
 }
 
-function isPresetPeriodLimit(value: number): value is 10 | 50 | 100 {
-	return value === 10 || value === 50 || value === 100;
-}
-
-function isPresetTicket(value: number): value is 0.1 | 1 | 10 {
-	return value === 0.1 || value === 1 || value === 10;
-}
 
 function cadenceLabel(cadence: OnboardingPreferences["cadence"]) {
 	if (cadence === "daily") return "Every day";

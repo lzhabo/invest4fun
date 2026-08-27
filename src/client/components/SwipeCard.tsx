@@ -692,6 +692,7 @@ export function SwipeCard({
 			<div className="card-head">
 				<div className="asset-title">
 					<AssetMark
+						assetId={candidate.assetId}
 						symbol={candidate.symbol}
 					iconUrl={candidate.iconUrl}
 					size="lg"

@@ -8,6 +8,7 @@ export const MAX_SLIPPAGE_BPS = 50;
 export const MAX_PRICE_IMPACT_BPS = 100;
 export const QUOTE_TTL_SECONDS = 60;
 export const POLICY_VERSION = "investmade-policy/v1";
+export const ONBOARDING_VERSION = 1;
 
 /** Stable CoinGecko IDs; arbitrary Solana tokens resolve by mint at runtime. */
 export const COINGECKO_COIN_IDS: Record<string, string> = {

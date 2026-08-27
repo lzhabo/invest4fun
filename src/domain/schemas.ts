@@ -298,8 +298,7 @@ const solanaExecutionRequestSchema = z.object({
 	chain: z.literal("SOLANA"),
 	cluster: z.literal(SOLANA_CLUSTER),
 	inputToken: z.literal(SOLANA_USDC_MINT),
-	// ponytail: abuse ceiling only; executable capacity comes from the compiled transaction.
-	selections: z.array(selectedAssetSchema).min(1).max(100),
+	selections: z.array(selectedAssetSchema).min(1).max(10),
 });
 
 export const executionRequestSchema = solanaExecutionRequestSchema;

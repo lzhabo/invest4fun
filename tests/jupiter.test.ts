@@ -131,6 +131,29 @@ describe("Jupiter atomic Solana execution", () => {
 		).toBe(false);
 	});
 
+	it("builds the ranked feed from metadata without requesting exact swap routes", async () => {
+		const wallet = Keypair.generate().publicKey.toBase58();
+		const { provider, fetcher } = providerFor(wallet);
+		const assetIds = Object.values(SOLANA_ASSET_REGISTRY)
+			.slice(0, 2)
+			.map((asset) => asset.assetId);
+
+		const candidates = await provider.getCandidatesForFeed(
+			wallet,
+			assetIds,
+			"1000000",
+			new Date("2026-08-27T12:00:00.000Z"),
+			2,
+		);
+
+		expect(candidates.map((candidate) => candidate.assetId)).toEqual(assetIds);
+		expect(
+			fetcher.mock.calls.some(([input]) =>
+				String(input).includes("/swap/v2/build"),
+			),
+		).toBe(false);
+	});
+
 	it("keeps an exact-size routed candidate executable for review", async () => {
 		const wallet = Keypair.generate().publicKey.toBase58();
 		const { provider } = providerFor(wallet);

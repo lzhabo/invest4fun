@@ -1334,6 +1334,19 @@ html[data-theme="dark"] .topbar.topbar-onboarding .wallet-button:disabled {
   margin: 0 0 9px;
 }
 .page-heading p, .review-ledger header p, .empty-page > p { color: var(--muted); margin: 0; font-size: 16px; }
+.feed-page-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+.feed-refresh-control {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.feed-refresh-control small { color: var(--muted); white-space: nowrap; }
+.feed-refresh-control .button { min-height: 40px; padding: 8px 14px; }
 
 .card-stage {
   display: grid;
@@ -1431,6 +1444,12 @@ html[data-theme="dark"] .card-decision-flash b { color: var(--muted); }
   height: 100%;
   padding: 0;
   object-fit: cover;
+}
+.asset-mark > [data-asset-fallback] {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
 }
 .asset-mark-lg { width: 72px; height: 72px; border: 1px solid var(--line-strong); border-radius: 50%; font-size: 27px; }
 .asset-mark-md { width: 48px; height: 48px; }
@@ -2418,6 +2437,7 @@ html[data-theme="dark"] .button-top-up:hover:not(:disabled) { color: var(--accen
 .account-top-up-wallet { display: grid; gap: 10px; margin-top: 14px; }
 .account-top-up-wallet > span { color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .6px; text-transform: uppercase; }
 .account-top-up-wallet code { overflow-wrap: anywhere; font-size: 13px; line-height: 1.55; }
+.account-top-up-qr { width: 184px; max-width: 100%; margin: 0 auto; border: 8px solid #fff; border-radius: 10px; }
 .account-top-up-copy { width: 100%; background: var(--acid); color: var(--accent-ink); }
 .account-top-up-copy:hover:not(:disabled) { border-color: var(--acid-hover); background: var(--acid-hover); color: var(--accent-ink); }
 .account-top-up-blink { background: color-mix(in srgb, var(--accent-primary) 8%, var(--ground)); }
@@ -2438,6 +2458,17 @@ html[data-theme="dark"] .button-top-up:hover:not(:disabled) { color: var(--accen
 .account-top-up-success { color: var(--positive-fg); }
 .account-top-up-note { display: flex; align-items: flex-start; gap: 9px; margin: 14px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .account-top-up-note svg { width: 16px; height: 16px; flex: 0 0 auto; color: var(--blue); }
+.funding-transfer-panel { display: grid; gap: 14px; }
+.funding-transfer-actions { display: grid; gap: 12px; }
+.funding-transfer-actions label { display: grid; grid-template-columns: minmax(0, 1fr) 130px; gap: 8px; }
+.funding-transfer-actions label > span { grid-column: 1 / -1; color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .4px; text-transform: uppercase; }
+.funding-transfer-actions input { min-width: 0; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--paper); padding: 10px 12px; color: var(--ink); font: 700 14px var(--font-body); }
+.funding-transfer-actions .button { min-height: 42px; }
+.funding-balance-status { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.funding-balance-status span { font-size: 12px; font-weight: 800; }
+.funding-balance-status .button { min-height: 38px; margin-left: auto; padding: 7px 11px; }
+.funding-balance-status svg { width: 15px; height: 15px; }
+.funding-status { margin: 10px 0 0; color: var(--positive-fg); font-size: 12px; }
 .copy-address { display: inline-grid; width: 28px; height: 28px; place-items: center; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--paper); padding: 0; color: var(--ink); cursor: pointer; }
 .copy-address svg { width: 14px; height: 14px; stroke-width: 2.5; }
 .copy-address:hover { border-color: var(--blue); color: var(--blue); }

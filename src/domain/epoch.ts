@@ -1,10 +1,27 @@
 export type InvestmentCadence = "daily" | "weekly" | "monthly";
 
-export function cadenceEpoch(cadence: InvestmentCadence, date = new Date()): string {
-  const day = date.toISOString().slice(0, 10);
+export function cadenceEpoch(
+  cadence: InvestmentCadence,
+  date = new Date(),
+  timezone = "UTC"
+): string {
+  const localDate = dateInTimezone(date, timezone);
+  const day = localDate.toISOString().slice(0, 10);
   if (cadence === "daily") return `D:${day}`;
   if (cadence === "monthly") return `M:${day.slice(0, 7)}`;
-  return `W:${weeklyEpoch(date)}`;
+  return `W:${weeklyEpoch(localDate)}`;
+}
+
+function dateInTimezone(date: Date, timezone: string): Date {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((part) => part.type === type)?.value);
+  return new Date(Date.UTC(value("year"), value("month") - 1, value("day")));
 }
 
 export function weeklyEpoch(date = new Date()): string {

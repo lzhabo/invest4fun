@@ -8,12 +8,23 @@ import {
 	type FeedRankingProviderId,
 	type OnboardingPreferences,
 } from "../domain/schemas.js";
+import { executionBudgetUsage } from "./store.js";
 import type {
   ExecutionRecord,
   SettledOutput,
   StateStore,
+	UserAccount,
   WeeklySession
 } from "./store.js";
+
+interface UserAccountRow {
+	privy_user_id: string;
+	canonical_solana_wallet: string;
+	timezone: string;
+	onboarding_version: number;
+	onboarding_completed_at: Date | null;
+	created_at: Date;
+}
 
 interface SessionRow {
   id: string;
@@ -55,6 +66,112 @@ export class PostgresStateStore implements StateStore {
 		statement_timeout: 15_000,
       ssl: databaseUrl.includes("localhost") ? false : { rejectUnauthorized: true }
     });
+  }
+
+	async getAccount(privyUserId: string): Promise<UserAccount | undefined> {
+		const result = await this.pool.query<UserAccountRow>(
+			`SELECT privy_user_id, canonical_solana_wallet, timezone,
+			        onboarding_version, onboarding_completed_at, created_at
+			 FROM user_accounts WHERE privy_user_id = $1`,
+			[privyUserId.toLowerCase()],
+		);
+		const row = result.rows[0];
+		return row
+			? {
+					privyUserId: row.privy_user_id,
+					canonicalSolanaWallet: row.canonical_solana_wallet,
+					timezone: row.timezone,
+					onboardingVersion: row.onboarding_version,
+					onboardingCompletedAt:
+						row.onboarding_completed_at?.toISOString() ?? undefined,
+					createdAt: row.created_at.toISOString(),
+				}
+			: undefined;
+	}
+
+	async getOrCreateAccount(
+		privyUserId: string,
+		canonicalSolanaWallet: string,
+		timezone: string,
+	): Promise<UserAccount> {
+		const result = await this.pool.query<UserAccountRow>(
+			`INSERT INTO user_accounts (
+			   privy_user_id, canonical_solana_wallet, timezone
+			 ) VALUES ($1, $2, $3)
+			 ON CONFLICT (privy_user_id) DO UPDATE SET
+			   timezone = CASE
+			     WHEN user_accounts.canonical_solana_wallet = EXCLUDED.canonical_solana_wallet
+			     THEN EXCLUDED.timezone
+			     ELSE user_accounts.timezone
+			   END,
+			   updated_at = now()
+			 RETURNING privy_user_id, canonical_solana_wallet, timezone,
+			   onboarding_version, onboarding_completed_at, created_at`,
+			[privyUserId.toLowerCase(), canonicalSolanaWallet, timezone],
+		);
+		const row = result.rows[0];
+		if (!row) throw new Error("ACCOUNT_UPSERT_FAILED");
+		if (row.canonical_solana_wallet !== canonicalSolanaWallet) {
+			throw new Error("CANONICAL_WALLET_MISMATCH");
+		}
+		return {
+			privyUserId: row.privy_user_id,
+			canonicalSolanaWallet: row.canonical_solana_wallet,
+			timezone: row.timezone,
+			onboardingVersion: row.onboarding_version,
+			onboardingCompletedAt:
+				row.onboarding_completed_at?.toISOString() ?? undefined,
+			createdAt: row.created_at.toISOString(),
+		};
+	}
+
+	async completeAccountOnboarding(
+		privyUserId: string,
+		canonicalSolanaWallet: string,
+		version: number,
+	): Promise<UserAccount> {
+		const result = await this.pool.query<UserAccountRow>(
+			`INSERT INTO user_accounts (
+			   privy_user_id, canonical_solana_wallet, timezone,
+			   onboarding_version, onboarding_completed_at
+			 ) VALUES ($1, $2, 'UTC', $3, now())
+			 ON CONFLICT (privy_user_id) DO UPDATE SET
+			   onboarding_version = EXCLUDED.onboarding_version,
+			   onboarding_completed_at = COALESCE(
+			     user_accounts.onboarding_completed_at,
+			     EXCLUDED.onboarding_completed_at
+			   ),
+			   updated_at = now()
+			 WHERE user_accounts.canonical_solana_wallet = EXCLUDED.canonical_solana_wallet
+			 RETURNING privy_user_id, canonical_solana_wallet, timezone,
+			   onboarding_version, onboarding_completed_at, created_at`,
+			[privyUserId.toLowerCase(), canonicalSolanaWallet, version],
+		);
+		const row = result.rows[0];
+		if (!row) throw new Error("CANONICAL_WALLET_MISMATCH");
+		return {
+			privyUserId: row.privy_user_id,
+			canonicalSolanaWallet: row.canonical_solana_wallet,
+			timezone: row.timezone,
+			onboardingVersion: row.onboarding_version,
+			onboardingCompletedAt:
+				row.onboarding_completed_at?.toISOString() ?? undefined,
+			createdAt: row.created_at.toISOString(),
+		};
+	}
+
+  async getPeriodBudgetUsage(ownerId: string, epochId: string) {
+    const result = await this.pool.query<ExecutionRow>(
+      `SELECT e.plan, e.status, e.submission_mode, e.transaction_hashes,
+              e.settled_outputs, e.settled_at
+       FROM executions e JOIN weekly_sessions s ON s.id = e.session_id
+       WHERE lower(s.owner_id) = lower($1) AND s.epoch_id = $2`,
+      [ownerId, epochId]
+    );
+    return result.rows
+      .map(mapExecution)
+      .reduce((sum, execution) => sum + executionBudgetUsage(execution), 0n)
+      .toString();
   }
 
   async getProviderSnapshot(key: string) {
@@ -194,7 +311,11 @@ export class PostgresStateStore implements StateStore {
     return result.rows[0] ? mapSession(result.rows[0]) : undefined;
   }
 
-  async reserveExecution(sessionId: string, plan: ExecutionPlan): Promise<ExecutionRecord> {
+  async reserveExecution(
+    sessionId: string,
+    plan: ExecutionPlan,
+    periodBudgetBaseUnits?: string
+  ): Promise<ExecutionRecord> {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -212,6 +333,28 @@ export class PostgresStateStore implements StateStore {
           return existing;
         }
         throw new Error("EPOCH_ALREADY_EXECUTED");
+      }
+      if (periodBudgetBaseUnits) {
+        await client.query(
+          `SELECT id FROM weekly_sessions
+           WHERE lower(owner_id) = lower($1) AND epoch_id = $2
+           FOR UPDATE`,
+          [session.owner_id, session.epoch_id]
+        );
+        const executions = await client.query<ExecutionRow>(
+          `SELECT e.plan, e.status, e.submission_mode, e.transaction_hashes,
+                  e.settled_outputs, e.settled_at
+           FROM executions e
+           JOIN weekly_sessions s ON s.id = e.session_id
+           WHERE lower(s.owner_id) = lower($1) AND s.epoch_id = $2`,
+          [session.owner_id, session.epoch_id]
+        );
+        const consumed = executions.rows
+          .map(mapExecution)
+          .reduce((sum, execution) => sum + executionBudgetUsage(execution), 0n);
+        if (consumed + BigInt(plan.totalInputBaseUnits) > BigInt(periodBudgetBaseUnits)) {
+          throw new Error("PERIOD_BUDGET_EXCEEDED");
+        }
       }
       await client.query(
         `INSERT INTO executions (
@@ -260,26 +403,66 @@ export class PostgresStateStore implements StateStore {
   async refreshPreparedExecution(
     id: string,
     expectedAuthorizedPlanHash: string,
-    plan: ExecutionPlan
+    plan: ExecutionPlan,
+    periodBudgetBaseUnits?: string
   ): Promise<ExecutionRecord> {
-    const result = await this.pool.query<ExecutionRow>(
-      `UPDATE executions
-       SET plan = $2::jsonb,
-           authorized_plan_hash = $4,
-           updated_at = now()
-       WHERE id = $1
-         AND status = 'PREPARED'
-         AND authorized_plan_hash = $3
-       RETURNING plan, status, submission_mode, transaction_hashes, settled_outputs, settled_at`,
-      [
-        id,
-        JSON.stringify({ ...plan, executionId: id }),
-        expectedAuthorizedPlanHash,
-        plan.authorizedPlanHash
-      ]
-    );
-    if (!result.rows[0]) throw new Error("EPOCH_ALREADY_EXECUTED");
-    return mapExecution(result.rows[0]);
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      if (periodBudgetBaseUnits) {
+        const context = await client.query<{ owner_id: string; epoch_id: string }>(
+          `SELECT s.owner_id, s.epoch_id
+           FROM executions e JOIN weekly_sessions s ON s.id = e.session_id
+           WHERE e.id = $1 FOR UPDATE OF e, s`,
+          [id]
+        );
+        const session = context.rows[0];
+        if (!session) throw new Error("EXECUTION_NOT_FOUND");
+        await client.query(
+          `SELECT id FROM weekly_sessions
+           WHERE lower(owner_id) = lower($1) AND epoch_id = $2
+           FOR UPDATE`,
+          [session.owner_id, session.epoch_id]
+        );
+        const executions = await client.query<ExecutionRow>(
+          `SELECT e.plan, e.status, e.submission_mode, e.transaction_hashes,
+                  e.settled_outputs, e.settled_at
+           FROM executions e JOIN weekly_sessions s ON s.id = e.session_id
+           WHERE lower(s.owner_id) = lower($1) AND s.epoch_id = $2 AND e.id <> $3`,
+          [session.owner_id, session.epoch_id, id]
+        );
+        const consumed = executions.rows
+          .map(mapExecution)
+          .reduce((sum, execution) => sum + executionBudgetUsage(execution), 0n);
+        if (consumed + BigInt(plan.totalInputBaseUnits) > BigInt(periodBudgetBaseUnits)) {
+          throw new Error("PERIOD_BUDGET_EXCEEDED");
+        }
+      }
+      const result = await client.query<ExecutionRow>(
+        `UPDATE executions
+         SET plan = $2::jsonb,
+             authorized_plan_hash = $4,
+             updated_at = now()
+         WHERE id = $1
+           AND status = 'PREPARED'
+           AND authorized_plan_hash = $3
+         RETURNING plan, status, submission_mode, transaction_hashes, settled_outputs, settled_at`,
+        [
+          id,
+          JSON.stringify({ ...plan, executionId: id }),
+          expectedAuthorizedPlanHash,
+          plan.authorizedPlanHash
+        ]
+      );
+      if (!result.rows[0]) throw new Error("EPOCH_ALREADY_EXECUTED");
+      await client.query("COMMIT");
+      return mapExecution(result.rows[0]);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async updateExecution(
@@ -290,8 +473,11 @@ export class PostgresStateStore implements StateStore {
     submissionMode: ExecutionRecord["submissionMode"] = "SEQUENTIAL"
   ): Promise<ExecutionRecord> {
     const terminal = ["SETTLED", "PARTIAL", "FAILED"].includes(status);
-    const result = await this.pool.query<ExecutionRow>(
-      `UPDATE executions
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query<ExecutionRow>(
+        `UPDATE executions
        SET status = $2,
            transaction_hashes = $3,
            settled_outputs = $4::jsonb,
@@ -300,10 +486,25 @@ export class PostgresStateStore implements StateStore {
            updated_at = now()
        WHERE id = $1
        RETURNING plan, status, submission_mode, transaction_hashes, settled_outputs, settled_at`,
-      [id, status, transactionHashes, JSON.stringify(settledOutputs), submissionMode, terminal]
-    );
-    if (!result.rows[0]) throw new Error("EXECUTION_NOT_FOUND");
-    return mapExecution(result.rows[0]);
+        [id, status, transactionHashes, JSON.stringify(settledOutputs), submissionMode, terminal]
+      );
+      if (!result.rows[0]) throw new Error("EXECUTION_NOT_FOUND");
+      if (terminal) {
+        await client.query(
+          `UPDATE weekly_sessions
+           SET execution_id = NULL, status = 'OPEN', updated_at = now()
+           WHERE execution_id = $1`,
+          [id]
+        );
+      }
+      await client.query("COMMIT");
+      return mapExecution(result.rows[0]);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   private async getExecutionWithClient(client: PoolClient, id: string) {

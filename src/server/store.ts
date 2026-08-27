@@ -49,7 +49,28 @@ export interface SettledOutput {
   status: "success" | "failed";
 }
 
+export interface UserAccount {
+	privyUserId: string;
+	canonicalSolanaWallet: string;
+	timezone: string;
+	onboardingVersion: number;
+	onboardingCompletedAt?: string;
+	createdAt: string;
+}
+
 export interface StateStore extends ProviderSnapshotCache {
+	getAccount(privyUserId: string): Promise<UserAccount | undefined>;
+	getOrCreateAccount(
+		privyUserId: string,
+		canonicalSolanaWallet: string,
+		timezone: string,
+	): Promise<UserAccount>;
+	completeAccountOnboarding(
+		privyUserId: string,
+		canonicalSolanaWallet: string,
+		version: number,
+	): Promise<UserAccount>;
+  getPeriodBudgetUsage(ownerId: string, epochId: string): Promise<string>;
   getPreferences(ownerId: string): Promise<OnboardingPreferences | undefined>;
   setPreferences(
     ownerId: string,
@@ -66,11 +87,16 @@ export interface StateStore extends ProviderSnapshotCache {
     feedRankingProvider?: FeedRankingProviderId
   ): Promise<WeeklySession>;
   getSession(id: string): Promise<WeeklySession | undefined>;
-  reserveExecution(sessionId: string, plan: ExecutionPlan): Promise<ExecutionRecord>;
+  reserveExecution(
+    sessionId: string,
+    plan: ExecutionPlan,
+    periodBudgetBaseUnits?: string
+  ): Promise<ExecutionRecord>;
   refreshPreparedExecution(
     id: string,
     expectedAuthorizedPlanHash: string,
-    plan: ExecutionPlan
+    plan: ExecutionPlan,
+    periodBudgetBaseUnits?: string
   ): Promise<ExecutionRecord>;
   getExecution(id: string): Promise<ExecutionRecord | undefined>;
   updateExecution(
@@ -83,14 +109,78 @@ export interface StateStore extends ProviderSnapshotCache {
 }
 
 export class MemoryStateStore implements StateStore {
+	private readonly accounts = new Map<string, UserAccount>();
   private readonly sessions = new Map<string, WeeklySession>();
   private readonly sessionByEpoch = new Map<string, string>();
   private readonly executions = new Map<string, ExecutionRecord>();
   private readonly preferences = new Map<string, OnboardingPreferences>();
-  private readonly providerSnapshots = new Map<
+	private readonly providerSnapshots = new Map<
     string,
     { value: unknown; expiresAt: string }
-  >();
+	>();
+
+	async getAccount(privyUserId: string) {
+		return this.accounts.get(privyUserId.toLowerCase());
+	}
+
+	async getOrCreateAccount(
+		privyUserId: string,
+		canonicalSolanaWallet: string,
+		timezone: string,
+	) {
+		const key = privyUserId.toLowerCase();
+		const existing = this.accounts.get(key);
+		if (existing) {
+			if (existing.canonicalSolanaWallet !== canonicalSolanaWallet) {
+				throw new Error("CANONICAL_WALLET_MISMATCH");
+			}
+			const updated = { ...existing, timezone };
+			this.accounts.set(key, updated);
+			return updated;
+		}
+		const account: UserAccount = {
+			privyUserId,
+			canonicalSolanaWallet,
+			timezone,
+			onboardingVersion: 0,
+			createdAt: new Date().toISOString(),
+		};
+		this.accounts.set(key, account);
+		return account;
+	}
+
+	async completeAccountOnboarding(
+		privyUserId: string,
+		canonicalSolanaWallet: string,
+		version: number,
+	) {
+		const existing = await this.getOrCreateAccount(
+			privyUserId,
+			canonicalSolanaWallet,
+			this.accounts.get(privyUserId.toLowerCase())?.timezone ?? "UTC",
+		);
+		const completed: UserAccount = {
+			...existing,
+			onboardingVersion: version,
+			onboardingCompletedAt:
+				existing.onboardingCompletedAt ?? new Date().toISOString(),
+		};
+		this.accounts.set(privyUserId.toLowerCase(), completed);
+		return completed;
+	}
+
+  async getPeriodBudgetUsage(ownerId: string, epochId: string) {
+    const consumed = [...this.executions.values()]
+      .filter((execution) => {
+        const session = this.sessions.get(execution.plan.sessionId);
+        return (
+          session?.ownerId.toLowerCase() === ownerId.toLowerCase() &&
+          session.epochId === epochId
+        );
+      })
+      .reduce((sum, execution) => sum + executionBudgetUsage(execution), 0n);
+    return consumed.toString();
+  }
 
   async getProviderSnapshot(key: string) {
     const snapshot = this.providerSnapshots.get(key);
@@ -172,13 +262,31 @@ export class MemoryStateStore implements StateStore {
     return this.sessions.get(id);
   }
 
-  async reserveExecution(sessionId: string, plan: ExecutionPlan): Promise<ExecutionRecord> {
+  async reserveExecution(
+    sessionId: string,
+    plan: ExecutionPlan,
+    periodBudgetBaseUnits?: string
+  ): Promise<ExecutionRecord> {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error("SESSION_NOT_FOUND");
     if (session.executionId) {
       const existing = this.executions.get(session.executionId);
       if (existing?.plan.authorizedPlanHash === plan.authorizedPlanHash) return existing;
       throw new Error("EPOCH_ALREADY_EXECUTED");
+    }
+    if (periodBudgetBaseUnits) {
+      const consumed = [...this.executions.values()]
+        .filter((execution) => {
+          const executionSession = this.sessions.get(execution.plan.sessionId);
+          return (
+            executionSession?.ownerId.toLowerCase() === session.ownerId.toLowerCase() &&
+            executionSession.epochId === session.epochId
+          );
+        })
+        .reduce((sum, execution) => sum + executionBudgetUsage(execution), 0n);
+      if (consumed + BigInt(plan.totalInputBaseUnits) > BigInt(periodBudgetBaseUnits)) {
+        throw new Error("PERIOD_BUDGET_EXCEEDED");
+      }
     }
     const record: ExecutionRecord = {
       plan,
@@ -203,7 +311,8 @@ export class MemoryStateStore implements StateStore {
   async refreshPreparedExecution(
     id: string,
     expectedAuthorizedPlanHash: string,
-    plan: ExecutionPlan
+    plan: ExecutionPlan,
+    periodBudgetBaseUnits?: string
   ): Promise<ExecutionRecord> {
     const existing = this.executions.get(id);
     if (!existing) throw new Error("EXECUTION_NOT_FOUND");
@@ -212,6 +321,26 @@ export class MemoryStateStore implements StateStore {
       existing.plan.authorizedPlanHash !== expectedAuthorizedPlanHash
     ) {
       throw new Error("EPOCH_ALREADY_EXECUTED");
+    }
+    if (periodBudgetBaseUnits) {
+      const session = this.sessions.get(existing.plan.sessionId);
+      if (!session) throw new Error("SESSION_NOT_FOUND");
+      const consumed = [...this.executions.entries()]
+        .filter(([executionId, execution]) => {
+          if (executionId === id) return false;
+          const executionSession = this.sessions.get(execution.plan.sessionId);
+          return (
+            executionSession?.ownerId.toLowerCase() === session.ownerId.toLowerCase() &&
+            executionSession.epochId === session.epochId
+          );
+        })
+        .reduce(
+          (sum, [, execution]) => sum + executionBudgetUsage(execution),
+          0n
+        );
+      if (consumed + BigInt(plan.totalInputBaseUnits) > BigInt(periodBudgetBaseUnits)) {
+        throw new Error("PERIOD_BUDGET_EXCEEDED");
+      }
     }
     const refreshed = { ...existing, plan: { ...plan, executionId: id } };
     this.executions.set(id, refreshed);
@@ -238,8 +367,39 @@ export class MemoryStateStore implements StateStore {
         : undefined
     };
     this.executions.set(id, updated);
+    if (["SETTLED", "PARTIAL", "FAILED"].includes(status)) {
+      for (const [sessionId, session] of this.sessions) {
+        if (session.executionId !== id) continue;
+        this.sessions.set(sessionId, {
+          ...session,
+          status: "OPEN",
+          executionId: undefined
+        });
+      }
+    }
     return updated;
   }
+}
+
+export function executionBudgetUsage(execution: ExecutionRecord): bigint {
+  if (execution.status === "FAILED") return 0n;
+  if (
+    execution.status === "PREPARED" &&
+    execution.plan.quotes.every((quote) => Date.parse(quote.expiresAt) <= Date.now())
+  ) return 0n;
+  if (execution.status === "PARTIAL") {
+    const successfulAssets = new Set(
+      execution.settledOutputs
+        .filter((output) => output.status === "success")
+        .map((output) => output.assetId)
+    );
+    return execution.plan.quotes.reduce(
+      (sum, quote) =>
+        sum + (successfulAssets.has(quote.assetId) ? BigInt(quote.amountInBaseUnits) : 0n),
+      0n
+    );
+  }
+  return BigInt(execution.plan.totalInputBaseUnits);
 }
 
 function normalizeWallet(wallet: string, _chain: AppChain) {

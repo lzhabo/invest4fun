@@ -49,6 +49,48 @@ const plan: ExecutionPlan = {
 };
 
 describe("weekly session idempotency", () => {
+	it("keeps one canonical Solana wallet for a Privy account", async () => {
+		const store = new MemoryStateStore();
+		const wallet = "11111111111111111111111111111111";
+		const created = await store.getOrCreateAccount(
+			"privy:user-1",
+			wallet,
+			"Europe/Lisbon",
+		);
+
+		expect(created).toMatchObject({
+			privyUserId: "privy:user-1",
+			canonicalSolanaWallet: wallet,
+			timezone: "Europe/Lisbon",
+			onboardingVersion: 0,
+		});
+		await expect(
+			store.getOrCreateAccount(
+				"privy:user-1",
+				"So11111111111111111111111111111111111111112",
+				"Europe/Lisbon",
+			),
+		).rejects.toThrow("CANONICAL_WALLET_MISMATCH");
+	});
+
+	it("marks onboarding complete only for the canonical wallet", async () => {
+		const store = new MemoryStateStore();
+		const wallet = "11111111111111111111111111111111";
+		await store.getOrCreateAccount("privy:user-1", wallet, "Europe/Lisbon");
+
+		const completed = await store.completeAccountOnboarding(
+			"privy:user-1",
+			wallet,
+			1,
+		);
+
+		expect(completed).toMatchObject({
+			onboardingVersion: 1,
+			canonicalSolanaWallet: wallet,
+		});
+		expect(completed.onboardingCompletedAt).toBeTruthy();
+	});
+
   it("returns one session per wallet and epoch", async () => {
     const store = new MemoryStateStore();
     const first = await store.openSession("0xabc", "2026-W30");
@@ -174,5 +216,75 @@ describe("weekly session idempotency", () => {
       "BATCH"
     );
     expect(submitted.submissionMode).toBe("BATCH");
+  });
+
+  it("allows multiple settled baskets while enforcing the weekly budget", async () => {
+    const store = new MemoryStateStore();
+    const session = await store.openSession(
+      "0xabc",
+      "W:2026-W30",
+      "JUPITER",
+      "SOLANA",
+      "privy:user-1"
+    );
+    const firstPlan = {
+      ...plan,
+      sessionId: session.id,
+      totalInputBaseUnits: "30000000"
+    };
+    await store.reserveExecution(session.id, firstPlan, "50000000");
+    await store.updateExecution(firstPlan.executionId, "SETTLED");
+
+    const secondPlan = {
+      ...plan,
+      executionId: "execution-2",
+      sessionId: session.id,
+      authorizedPlanHash: `sha256:${"d".repeat(64)}`,
+      totalInputBaseUnits: "20000000"
+    };
+    await expect(
+      store.reserveExecution(session.id, secondPlan, "50000000")
+    ).resolves.toMatchObject({ status: "PREPARED" });
+    await store.updateExecution(secondPlan.executionId, "SETTLED");
+
+    await expect(
+      store.reserveExecution(
+        session.id,
+        {
+          ...plan,
+          executionId: "execution-3",
+          sessionId: session.id,
+          authorizedPlanHash: `sha256:${"e".repeat(64)}`,
+          totalInputBaseUnits: "1"
+        },
+        "50000000"
+      )
+    ).rejects.toThrow("PERIOD_BUDGET_EXCEEDED");
+  });
+
+  it("releases a failed basket from the weekly budget", async () => {
+    const store = new MemoryStateStore();
+    const session = await store.openSession("0xabc", "W:2026-W30");
+    const firstPlan = {
+      ...plan,
+      sessionId: session.id,
+      totalInputBaseUnits: "50000000"
+    };
+    await store.reserveExecution(session.id, firstPlan, "50000000");
+    await store.updateExecution(firstPlan.executionId, "FAILED");
+
+    await expect(
+      store.reserveExecution(
+        session.id,
+        {
+          ...plan,
+          executionId: "execution-after-failure",
+          sessionId: session.id,
+          authorizedPlanHash: `sha256:${"f".repeat(64)}`,
+          totalInputBaseUnits: "50000000"
+        },
+        "50000000"
+      )
+    ).resolves.toMatchObject({ status: "PREPARED" });
   });
 });
