@@ -95,6 +95,7 @@ export async function executionPlanHashMatchesReviewBasket(
 			assetId: candidate.assetId,
 			amountInBaseUnits,
 		})),
+		slippageMode: "RTSE",
 		slippageBps: 50,
 	};
 	const json = canonicalJson(

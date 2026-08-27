@@ -87,6 +87,8 @@ export type WalletCall = NonNullable<ExecutionRecord["walletCalls"]>[number];
 export interface PublicConfig {
 	demoMode: boolean;
 	executionMode: "demo" | "local-live" | "live";
+	livePurchasesEnabled: boolean;
+	liveBroadcastEnabled: boolean;
 	chain: "SOLANA";
 	cluster: "mainnet-beta";
 	stableToken: "USDC";
@@ -362,6 +364,7 @@ export const api = {
 				inputToken: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
 				periodLimitUsd,
 				selections,
+				slippageMode: "RTSE",
 				slippageBps: 50,
 			}),
 		}),

@@ -69,6 +69,11 @@ import { ExecutionProviderError } from "./adapters/types.js";
 import type { ExecutionActor } from "./auth.js";
 import { PrivyWalletAuth } from "./auth.js";
 import type { AppConfig } from "./config.js";
+import {
+	assertCanonicalExecutionOwner,
+	assertPlanQuotesFresh,
+	LivePurchaseSafetyError,
+} from "./live-purchase-safety.js";
 import { sessionEpochId } from "./session-epoch.js";
 import type { StateStore } from "./store.js";
 
@@ -184,6 +189,10 @@ export function createApp(deps: AppDependencies) {
 			cluster: SOLANA_CLUSTER,
 			stableToken: "USDC",
 			inputMint: SOLANA_USDC_MINT,
+			livePurchasesEnabled:
+				deps.config.liveExecution && deps.config.livePurchasesEnabled,
+			liveBroadcastEnabled:
+				deps.config.liveExecution && deps.config.liveBroadcastEnabled,
 			executionProviders: {
 				JUPITER: {
 					available: providerConfigured(deps.config, "JUPITER"),
@@ -483,6 +492,19 @@ export function createApp(deps: AppDependencies) {
 	};
 	const preferenceOwner = (response: Response) =>
 		String(response.locals.userId ?? response.locals.wallet);
+	const assertCanonicalOwner = async (
+		response: Response,
+		session?: Parameters<typeof assertCanonicalExecutionOwner>[0]["session"],
+	) => {
+		if (!deps.config.liveExecution) return;
+		const actorUserId = preferenceOwner(response);
+		assertCanonicalExecutionOwner({
+			account: await deps.store.getAccount(actorUserId),
+			actorUserId,
+			actorWallet: String(response.locals.wallet),
+			session,
+		});
+	};
 	const preferencesFor = async (response: Response) => {
 		const ownerId = preferenceOwner(response);
 		const byOwner = await deps.store.getPreferences(ownerId);
@@ -598,6 +620,7 @@ export function createApp(deps: AppDependencies) {
 			);
 			const storedPreferences = await preferencesFor(response);
 			const account = await deps.store.getAccount(preferenceOwner(response));
+			await assertCanonicalOwner(response);
 			const chain =
 				storedPreferences?.activeChain ??
 				appChainSchema
@@ -907,6 +930,13 @@ export function createApp(deps: AppDependencies) {
 		"/api/executions/prepare",
 		requireWallet,
 		async (request, response) => {
+			if (deps.config.liveExecution && !deps.config.livePurchasesEnabled) {
+				response.status(503).json({
+					error: "LIVE_PURCHASES_DISABLED",
+					message: "Live purchase preparation is temporarily disabled.",
+				});
+				return;
+			}
 			const timing = serverTiming("prepare", deps.config.NODE_ENV !== "test");
 			const parsed = executionRequestSchema.parse(request.body);
 			const session = await deps.store.getSession(parsed.sessionId);
@@ -919,6 +949,7 @@ export function createApp(deps: AppDependencies) {
 				response.status(404).json({ error: "SESSION_NOT_FOUND" });
 				return;
 			}
+			await assertCanonicalOwner(response, session);
 			const currentPreferences = await preferencesFor(response);
 			if (
 				currentPreferences &&
@@ -1169,6 +1200,13 @@ export function createApp(deps: AppDependencies) {
 				response.status(409).json({ error: "USE_DEMO_SETTLE" });
 				return;
 			}
+			if (!deps.config.liveBroadcastEnabled) {
+				response.status(503).json({
+					error: "LIVE_BROADCAST_DISABLED",
+					message: "Live transaction broadcasting is temporarily disabled.",
+				});
+				return;
+			}
 			const execution = await deps.store.getExecution(
 				String(request.params.executionId),
 			);
@@ -1185,10 +1223,12 @@ export function createApp(deps: AppDependencies) {
 				response.status(404).json({ error: "EXECUTION_NOT_FOUND" });
 				return;
 			}
+			await assertCanonicalOwner(response, session);
 			if (session.executionProvider !== execution.plan.provider) {
 				throw new Error("EXECUTION_PROVIDER_MISMATCH");
 			}
 			if (execution.plan.chain === "SOLANA") {
+				assertPlanQuotesFresh(execution.plan);
 				const provider = executionProvider(
 					deps,
 					execution.plan.provider,
@@ -1291,6 +1331,7 @@ export function createApp(deps: AppDependencies) {
 				response.status(404).json({ error: "EXECUTION_NOT_FOUND" });
 				return;
 			}
+			await assertCanonicalOwner(response, session);
 			if (session.executionProvider !== execution.plan.provider) {
 				throw new Error("EXECUTION_PROVIDER_MISMATCH");
 			}
@@ -1392,6 +1433,7 @@ export function createApp(deps: AppDependencies) {
 				response.status(404).json({ error: "EXECUTION_NOT_FOUND" });
 				return;
 			}
+			await assertCanonicalOwner(response, session);
 			response.json(execution);
 		},
 	);
@@ -1437,6 +1479,12 @@ export function createApp(deps: AppDependencies) {
 			if (error instanceof PolicyError) {
 				response
 					.status(422)
+					.json({ error: error.code, message: error.message });
+				return;
+			}
+			if (error instanceof LivePurchaseSafetyError) {
+				response
+					.status(error.code === "EXECUTION_NOT_FOUND" ? 404 : 409)
 					.json({ error: error.code, message: error.message });
 				return;
 			}

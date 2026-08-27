@@ -32,6 +32,8 @@ Demo mode is offline for candidates and execution:
 ```env
 INVESTMADE_DEMO_MODE=true
 LOCAL_LIVE_EXECUTION=false
+LIVE_PURCHASES_ENABLED=false
+LIVE_BROADCAST_ENABLED=false
 ```
 
 For local live Solana routes:
@@ -39,12 +41,17 @@ For local live Solana routes:
 ```env
 INVESTMADE_DEMO_MODE=true
 LOCAL_LIVE_EXECUTION=true
+LIVE_PURCHASES_ENABLED=true
+# Keep false until prepared transactions have been reviewed and simulated.
+LIVE_BROADCAST_ENABLED=false
 JUPITER_API_KEY=...
 SOLANA_RPC_URL=...
 SOLANA_WS_URL=...
 ```
 
 Production additionally requires Postgres, CoinGecko, Jupiter, Solana RPC, and Privy credentials. The 0G adapter remains isolated and is not wired into the staging runtime.
+
+Live releases are fail-closed. Enable `LIVE_PURCHASES_ENABLED` first to verify preparation and simulation, then enable `LIVE_BROADCAST_ENABLED` for the mainnet canary. Broadcast cannot be enabled while preparation is disabled.
 
 Use a pooled Neon connection in `DATABASE_URL` for the Vercel runtime and the direct connection in `DATABASE_URL_UNPOOLED` when running `npm run db:migrate`. Migrations are explicit and are not run by the Vercel build.
 

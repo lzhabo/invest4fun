@@ -18,6 +18,8 @@ This checklist matches the current multi-chain atomic-buy, exit, and PostgreSQL 
 - [ ] `NODE_ENV=production`
 - [ ] `INVESTMADE_DEMO_MODE=false`
 - [ ] `LOCAL_LIVE_EXECUTION=false`
+- [ ] `LIVE_PURCHASES_ENABLED=false` and `LIVE_BROADCAST_ENABLED=false` for the initial deploy.
+- [ ] Enable preparation first; enable broadcast only after the mainnet transaction review and simulation checks pass.
 - [ ] `DATABASE_URL`, `COINGECKO_API_KEY`, `ZG_ROUTER_API_KEY`, Privy credentials, a production session secret, and at least one Robinhood execution-provider key are present in the deployment secret store.
 - [ ] Dedicated Robinhood Chain RPC is configured; use an Alchemy URL when the Robinhood portfolio index is enabled.
 - [ ] When Solana is enabled, `JUPITER_API_KEY`, `SOLANA_RPC_URL`, and `SOLANA_WS_URL` are configured; use Alchemy endpoints when the Solana portfolio index is enabled.

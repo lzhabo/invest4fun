@@ -91,6 +91,18 @@ type JupiterToken = {
 
 const VERIFIED_CACHE_TTL_MS = 60 * 60_000;
 const DYNAMIC_CACHE_TTL_MS = 5 * 60_000;
+const JUPITER_SWAP_PROGRAM = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4";
+const SYSTEM_PROGRAM = "11111111111111111111111111111111";
+const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+const TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+const ASSOCIATED_TOKEN_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+const SAFE_SUPPORT_PROGRAMS = new Set([
+	SYSTEM_PROGRAM,
+	TOKEN_PROGRAM,
+	TOKEN_2022_PROGRAM,
+	ASSOCIATED_TOKEN_PROGRAM,
+	JUPITER_SWAP_PROGRAM,
+]);
 const SOLANA_USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
 const EXCLUDED_FEED_MINTS = new Set([SOLANA_USDC_MINT, SOLANA_USDT_MINT]);
 const EXCLUDED_STABLECOIN_SYMBOLS = new Set([
@@ -708,8 +720,22 @@ export class JupiterProvider implements ExecutionProvider, CandidateProvider {
 		const append = (
 			target: TransactionInstruction[],
 			instruction: JupiterInstruction | null | undefined,
+			kind: "compute" | "swap" | "support",
 		) => {
 			if (!instruction) return;
+			const allowed =
+				kind === "compute"
+					? instruction.programId === ComputeBudgetProgram.programId.toBase58()
+					: kind === "swap"
+						? instruction.programId === JUPITER_SWAP_PROGRAM
+						: SAFE_SUPPORT_PROGRAMS.has(instruction.programId);
+			if (!allowed) {
+				throw providerError(
+					"INVALID_TRANSACTION",
+					`Jupiter returned an unexpected ${kind} program.`,
+					instruction.programId,
+				);
+			}
 			const key = JSON.stringify(instruction);
 			if (instructionKeys.has(key)) return;
 			instructionKeys.add(key);
@@ -727,16 +753,16 @@ export class JupiterProvider implements ExecutionProvider, CandidateProvider {
 
 		for (const item of prepared) {
 			for (const instruction of item.build.computeBudgetInstructions ?? []) {
-				append(computeInstructions, instruction);
+				append(computeInstructions, instruction, "compute");
 			}
 			for (const instruction of item.build.setupInstructions ?? []) {
-				append(instructions, instruction);
+				append(instructions, instruction, "support");
 			}
-			append(instructions, item.build.swapInstruction);
+			append(instructions, item.build.swapInstruction, "swap");
 			for (const instruction of item.build.otherInstructions ?? []) {
-				append(instructions, instruction);
+				append(instructions, instruction, "support");
 			}
-			append(instructions, item.build.cleanupInstruction);
+			append(instructions, item.build.cleanupInstruction, "support");
 			for (const [tableAddress, addresses] of Object.entries(
 				item.build.addressesByLookupTableAddress ?? {},
 			)) {

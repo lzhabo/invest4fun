@@ -290,6 +290,9 @@ const executionRequestFields = {
 		})
 		.default(100),
 	selections: z.array(selectedAssetSchema).min(1),
+	// Jupiter computes dynamic slippage with RTSE. Keep slippageBps only for
+	// backwards-compatible demo math; it is not presented as a mainnet limit.
+	slippageMode: z.literal("RTSE").optional(),
 	slippageBps: z.number().int().min(1).max(100),
 };
 

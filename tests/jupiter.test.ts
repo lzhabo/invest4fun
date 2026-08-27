@@ -6,7 +6,7 @@ import {
 } from "../src/domain/solana.js";
 import { JupiterProvider } from "../src/server/adapters/jupiter.js";
 
-const memoProgram = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
+const jupiterProgram = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4";
 const blockhash = "11111111111111111111111111111111";
 
 function providerFor(
@@ -14,6 +14,7 @@ function providerFor(
 	unexpectedSigner?: string,
 	instructionBytes = 0,
 	simulationErrors: unknown[] = [null],
+	swapProgram = jupiterProgram,
 ) {
 	const fetcher = vi.fn(async (input: string | URL | Request) => {
 		const url = String(input);
@@ -50,7 +51,7 @@ function providerFor(
 				priceImpactPct: "0.001",
 				routePlan: [{ swapInfo: { label: "Mock AMM" } }],
 				swapInstruction: {
-					programId: memoProgram,
+					programId: swapProgram,
 					accounts: [
 						{
 							pubkey: unexpectedSigner ?? wallet,
@@ -294,7 +295,7 @@ describe("Jupiter atomic Solana execution", () => {
 					otherAmountThreshold: "990000",
 					priceImpactPct: "0.001",
 					swapInstruction: {
-						programId: memoProgram,
+						programId: jupiterProgram,
 						accounts: [],
 						data: "",
 					},
@@ -349,7 +350,7 @@ describe("Jupiter atomic Solana execution", () => {
 					outAmount: "1000000",
 					otherAmountThreshold: "990000",
 					swapInstruction: {
-						programId: memoProgram,
+						programId: jupiterProgram,
 						accounts: [],
 						data: "",
 					},
@@ -397,7 +398,7 @@ describe("Jupiter atomic Solana execution", () => {
 					otherAmountThreshold: "990000",
 					priceImpactPct: "0.001",
 					swapInstruction: {
-						programId: memoProgram,
+						programId: jupiterProgram,
 						accounts: [],
 						data: "",
 					},
@@ -669,6 +670,36 @@ describe("Jupiter atomic Solana execution", () => {
 					cluster: "mainnet-beta",
 					inputToken: SOLANA_USDC_MINT,
 					sessionId: "bad-signer",
+					periodLimitUsd: 10,
+					selections: [{ assetId, amountInBaseUnits: "1000000" }],
+					slippageBps: 50,
+				},
+				candidates,
+			),
+		).rejects.toMatchObject({ code: "INVALID_TRANSACTION" });
+	});
+
+	it("fails closed when Jupiter returns an unexpected top-level program", async () => {
+		const wallet = Keypair.generate().publicKey.toBase58();
+		const unknownProgram = Keypair.generate().publicKey.toBase58();
+		const { provider } = providerFor(
+			wallet,
+			undefined,
+			0,
+			[null],
+			unknownProgram,
+		);
+		const assetId = SOLANA_ASSET_REGISTRY.SOL?.assetId;
+		if (!assetId) throw new Error("SOL_ASSET_REQUIRED");
+		const candidates = await candidatesFor(provider, wallet, [assetId]);
+		await expect(
+			provider.prepareBasket(
+				wallet,
+				{
+					chain: "SOLANA",
+					cluster: "mainnet-beta",
+					inputToken: SOLANA_USDC_MINT,
+					sessionId: "bad-program",
 					periodLimitUsd: 10,
 					selections: [{ assetId, amountInBaseUnits: "1000000" }],
 					slippageBps: 50,

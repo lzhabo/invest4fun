@@ -20,6 +20,21 @@ describe("execution modes", () => {
 		expect(config.demoMode).toBe(true);
 		expect(config.localLiveExecution).toBe(true);
 		expect(config.liveExecution).toBe(true);
+		expect(config.livePurchasesEnabled).toBe(false);
+		expect(config.liveBroadcastEnabled).toBe(false);
+	});
+
+	it("requires both explicit switches before signed transactions can broadcast", () => {
+		expect(() =>
+			loadConfig({ ...base, LIVE_BROADCAST_ENABLED: "true" }),
+		).toThrow("LIVE_BROADCAST_ENABLED requires LIVE_PURCHASES_ENABLED=true");
+		const config = loadConfig({
+			...base,
+			LIVE_PURCHASES_ENABLED: "true",
+			LIVE_BROADCAST_ENABLED: "true",
+		});
+		expect(config.livePurchasesEnabled).toBe(true);
+		expect(config.liveBroadcastEnabled).toBe(true);
 	});
 
 	it("rejects local live signing in a production process", () => {

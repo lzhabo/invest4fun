@@ -7,6 +7,8 @@ const envSchema = z
 			.default("development"),
 		INVESTMADE_DEMO_MODE: z.enum(["true", "false"]).default("true"),
 		LOCAL_LIVE_EXECUTION: z.enum(["true", "false"]).default("false"),
+		LIVE_PURCHASES_ENABLED: z.enum(["true", "false"]).default("false"),
+		LIVE_BROADCAST_ENABLED: z.enum(["true", "false"]).default("false"),
 		PORT: z.coerce.number().int().positive().default(8787),
 		PUBLIC_ORIGIN: z.string().url().default("http://localhost:5173"),
 		SESSION_SECRET: z
@@ -70,12 +72,24 @@ const envSchema = z
 				}
 			}
 		}
+		if (
+			env.LIVE_BROADCAST_ENABLED === "true" &&
+			env.LIVE_PURCHASES_ENABLED !== "true"
+		) {
+			context.addIssue({
+				code: "custom",
+				path: ["LIVE_BROADCAST_ENABLED"],
+				message: "LIVE_BROADCAST_ENABLED requires LIVE_PURCHASES_ENABLED=true",
+			});
+		}
 	});
 
 export type AppConfig = z.infer<typeof envSchema> & {
 	demoMode: boolean;
 	localLiveExecution: boolean;
 	liveExecution: boolean;
+	livePurchasesEnabled: boolean;
+	liveBroadcastEnabled: boolean;
 };
 
 export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -87,5 +101,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
 		demoMode,
 		localLiveExecution,
 		liveExecution: localLiveExecution || !demoMode,
+		livePurchasesEnabled: parsed.LIVE_PURCHASES_ENABLED === "true",
+		liveBroadcastEnabled: parsed.LIVE_BROADCAST_ENABLED === "true",
 	};
 }

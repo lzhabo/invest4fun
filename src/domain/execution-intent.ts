@@ -26,6 +26,6 @@ export function executionIntent(
 		selections: [...parsed.selections].sort((left, right) =>
 			left.assetId.localeCompare(right.assetId),
 		),
-		slippageBps: parsed.slippageBps,
+		slippageMode: parsed.slippageMode ?? "RTSE",
 	};
 }
