@@ -21,6 +21,8 @@ const envSchema = z
 		JUPITER_API_KEY: z.string().optional(),
 		SOLANA_RPC_URL: z.string().url().optional(),
 		SOLANA_WS_URL: z.string().url().optional(),
+		CRON_SECRET: z.string().min(32).optional(),
+		RECONCILIATION_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
 		COINGECKO_API_KEY: z.string().optional(),
 		ZG_ROUTER_API_KEY: z.string().optional(),
 	})

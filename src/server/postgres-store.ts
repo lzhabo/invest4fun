@@ -410,6 +410,19 @@ export class PostgresStateStore implements StateStore {
     }
   }
 
+	async listExecutionsForReconciliation(limit: number) {
+		const result = await this.pool.query<ExecutionRow>(
+			`SELECT plan, status, submission_mode, transaction_hashes,
+			        settled_outputs, settled_at, legs
+			 FROM executions
+			 WHERE status = 'SUBMITTED'
+			 ORDER BY updated_at ASC
+			 LIMIT $1`,
+			[limit],
+		);
+		return result.rows.map(mapExecution);
+	}
+
   async refreshPreparedExecution(
     id: string,
     expectedAuthorizedPlanHash: string,

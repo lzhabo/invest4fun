@@ -53,6 +53,17 @@ Production additionally requires Postgres, CoinGecko, Jupiter, Solana RPC, and P
 
 Live releases are fail-closed. Enable `LIVE_PURCHASES_ENABLED` first to verify preparation and simulation, then enable `LIVE_BROADCAST_ENABLED` for the mainnet canary. Broadcast cannot be enabled while preparation is disabled.
 
+Set a random `CRON_SECRET` of at least 32 characters in Vercel. The protected
+`/api/cron/reconcile` job checks submitted Solana signatures once per day on all
+Vercel plans; the receipt also supports immediate manual checks. On Pro, the
+schedule in `vercel.json` can be increased to every few minutes. The cron never
+signs or broadcasts transactions.
+
+After every leg reaches a definitive terminal state, a partial or failed receipt
+can prepare a new basket containing only `FAILED` legs. Retry always requests
+fresh Jupiter quotes, rebuilds and simulates new transactions, and requires a new
+wallet confirmation. `UNKNOWN` and `CONFIRMED` legs are never retryable.
+
 Use a pooled Neon connection in `DATABASE_URL` for the Vercel runtime and the direct connection in `DATABASE_URL_UNPOOLED` when running `npm run db:migrate`. Migrations are explicit and are not run by the Vercel build.
 
 ## Verification
@@ -69,6 +80,7 @@ npm run build
 - `src/server/app.ts` — HTTP composition and authorization seam.
 - `src/server/bootstrap.ts` — runtime adapter selection.
 - `src/server/adapters/jupiter.ts` — Jupiter discovery, quote, build, submit, and reconcile implementation.
+- `src/server/reconcile-execution.ts` — shared manual/cron reconciliation state machine.
 - `src/server/adapters/solana-demo.ts` — offline candidate and execution adapters.
 - `src/server/adapters/coingecko.ts` — market-data adapter.
 - `src/server/adapters/deterministic-ranker.ts` — active staging ranking adapter; `zero-g.ts` remains isolated.

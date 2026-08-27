@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import express, {
@@ -75,6 +75,7 @@ import {
 	assertPlanQuotesFresh,
 	LivePurchaseSafetyError,
 } from "./live-purchase-safety.js";
+import { reconcileExecution } from "./reconcile-execution.js";
 import { sessionEpochId } from "./session-epoch.js";
 import type { StateStore } from "./store.js";
 
@@ -176,6 +177,47 @@ export function createApp(deps: AppDependencies) {
 			chain: "SOLANA",
 			cluster: SOLANA_CLUSTER,
 		});
+	});
+
+	app.get("/api/cron/reconcile", async (request, response) => {
+		if (!deps.config.CRON_SECRET) {
+			response.status(503).json({ error: "RECONCILIATION_CRON_NOT_CONFIGURED" });
+			return;
+		}
+		if (!hasBearerSecret(request.headers.authorization, deps.config.CRON_SECRET)) {
+			response.status(401).json({ error: "UNAUTHORIZED" });
+			return;
+		}
+		if (!deps.config.liveExecution) {
+			response.json({ scanned: 0, terminal: 0, pending: 0, failed: 0 });
+			return;
+		}
+
+		const executions = await deps.store.listExecutionsForReconciliation(
+			deps.config.RECONCILIATION_BATCH_SIZE,
+		);
+		let terminal = 0;
+		let pending = 0;
+		let failed = 0;
+		for (const execution of executions) {
+			try {
+				const session = await deps.store.getSession(execution.plan.sessionId);
+				if (!session || session.executionProvider !== execution.plan.provider) {
+					throw new Error("EXECUTION_CONTEXT_MISMATCH");
+				}
+				const result = await reconcileExecution({
+					execution,
+					session,
+					provider: executionProvider(deps, execution.plan.provider),
+					store: deps.store,
+				});
+				if (result.pending) pending += 1;
+				else terminal += 1;
+			} catch {
+				failed += 1;
+			}
+		}
+		response.json({ scanned: executions.length, terminal, pending, failed });
 	});
 
 	app.get("/api/config", (_request, response) => {
@@ -1322,108 +1364,12 @@ export function createApp(deps: AppDependencies) {
 					deps,
 					execution.plan.provider,
 				);
-				const preparedTransactions =
-					execution.plan.solanaTransactions ??
-					(execution.plan.solanaTransaction
-						? [execution.plan.solanaTransaction]
-						: []);
-				if (
-					!preparedTransactions.length ||
-					!provider.transactionStatus ||
-					!provider.reconcileOutputs
-				) {
-					throw new Error("SOLANA_RECONCILIATION_UNAVAILABLE");
-				}
-				const transactionStatus = provider.transactionStatus.bind(provider);
-				const reconcileOutputs = provider.reconcileOutputs.bind(provider);
-				let current = execution;
-				let pending = false;
-				const outputsByAsset = new Map(
-					execution.settledOutputs.map((output) => [output.assetId, output]),
-				);
-				for (const [index, prepared] of preparedTransactions.entries()) {
-					const leg = current.legs[index];
-					const signature = leg?.signature;
-					if (!leg || !signature || leg.status === "PREPARED") {
-						pending = true;
-						continue;
-					}
-					if (leg.status === "FINALIZED" || leg.status === "FAILED") continue;
-					const observed = await transactionStatus(
-						signature,
-						leg.lastValidBlockHeight,
-					);
-					if (observed.state === "NOT_FOUND" || observed.state === "PENDING") {
-						pending = true;
-						continue;
-					}
-					if (observed.state === "FAILED") {
-						current = await deps.store.transitionExecutionLeg(
-							execution.plan.executionId,
-							index,
-							{
-								type: "OBSERVED_FAILED",
-								at: new Date().toISOString(),
-								failureCode: "SOLANA_TRANSACTION_FAILED",
-							},
-						);
-						for (const change of prepared.expectedBalanceChanges) {
-							outputsByAsset.set(change.assetId, {
-								assetId: change.assetId,
-								amountOutBaseUnits: "0",
-								transactionHash: signature,
-								blockNumber: observed.slot?.toString(),
-								status: "failed",
-							});
-						}
-						continue;
-					}
-					const reconciled = await reconcileOutputs(
-						signature,
-						session.wallet,
-						prepared.expectedBalanceChanges,
-					);
-					if (!reconciled) {
-						pending = true;
-						continue;
-					}
-					for (const output of reconciled) {
-						outputsByAsset.set(output.assetId, output);
-					}
-					if (observed.state === "CONFIRMED") {
-						if (leg.status !== "CONFIRMED") {
-							current = await deps.store.transitionExecutionLeg(
-								execution.plan.executionId,
-								index,
-								{
-									type: "OBSERVED_CONFIRMED",
-									at: new Date().toISOString(),
-								},
-							);
-						}
-						pending = true;
-						continue;
-					}
-					const successful = reconciled.every(
-						(output) => output.status === "success",
-					);
-					current = await deps.store.transitionExecutionLeg(
-						execution.plan.executionId,
-						index,
-						{
-							type: successful ? "OBSERVED_FINALIZED" : "OBSERVED_FAILED",
-							at: new Date().toISOString(),
-							...(successful ? {} : { failureCode: "OUTPUT_VALIDATION_FAILED" }),
-						},
-					);
-				}
-				const updated = await deps.store.updateExecution(
-					execution.plan.executionId,
-					current.status,
-					current.transactionHashes,
-					[...outputsByAsset.values()],
-					execution.plan.solanaTransactions ? "SEQUENTIAL" : "BATCH",
-				);
+				const { execution: updated, pending } = await reconcileExecution({
+					execution,
+					session,
+					provider,
+					store: deps.store,
+				});
 				response.status(pending ? 202 : 200).json({
 					...updated,
 					...(pending ? { reconciliation: ["pending"] } : {}),
@@ -1611,6 +1557,14 @@ function executionProvider(
 		);
 	}
 	return provider;
+}
+
+function hasBearerSecret(authorization: string | undefined, expected: string) {
+	const prefix = "Bearer ";
+	if (!authorization?.startsWith(prefix)) return false;
+	const provided = Buffer.from(authorization.slice(prefix.length));
+	const secret = Buffer.from(expected);
+	return provided.length === secret.length && timingSafeEqual(provided, secret);
 }
 
 async function resolveAsset(deps: AppDependencies, assetId: string) {

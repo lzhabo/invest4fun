@@ -71,3 +71,37 @@ describe("Privy production security headers", () => {
 		);
 	});
 });
+
+describe("reconciliation cron boundary", () => {
+	const cronSecret = "test-cron-secret-that-is-at-least-32-characters";
+	const cronApp = createApp({
+		config: loadConfig({
+			NODE_ENV: "test",
+			INVESTMADE_DEMO_MODE: "true",
+			PUBLIC_ORIGIN: "http://localhost:5173",
+			SESSION_SECRET: "test-secret-that-is-at-least-32-characters",
+			PRIVY_APP_ID: "test-privy-app-id",
+			PRIVY_APP_SECRET: "test-privy-app-secret",
+			CRON_SECRET: cronSecret,
+		}),
+		store: new MemoryStateStore(),
+		candidates,
+		inference: new DeterministicRanker(),
+		execution,
+	});
+
+	it("rejects requests without the exact bearer secret", async () => {
+		await request(cronApp).get("/api/cron/reconcile").expect(401);
+		await request(cronApp)
+			.get("/api/cron/reconcile")
+			.set("Authorization", "Bearer wrong-secret")
+			.expect(401);
+	});
+
+	it("accepts Vercel's bearer secret and stays inert in demo mode", async () => {
+		await request(cronApp)
+			.get("/api/cron/reconcile")
+			.set("Authorization", `Bearer ${cronSecret}`)
+			.expect(200, { scanned: 0, terminal: 0, pending: 0, failed: 0 });
+	});
+});

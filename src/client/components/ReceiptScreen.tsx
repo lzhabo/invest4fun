@@ -23,6 +23,7 @@ export function ReceiptScreen({
 	onResume,
 	onViewPortfolio,
 	onStartNextBasket,
+	onRetryFailed,
 }: {
 	record?: ExecutionRecord;
 	selected: Candidate[];
@@ -31,6 +32,9 @@ export function ReceiptScreen({
 	onResume: () => Promise<void>;
 	onViewPortfolio: () => void;
 	onStartNextBasket: () => void;
+	onRetryFailed?: (
+		selections: Array<{ assetId: string; amountInBaseUnits: string }>,
+	) => void;
 }) {
 	const showConfetti = useSettlementConfetti(record);
 
@@ -79,6 +83,7 @@ export function ReceiptScreen({
 		transactionCount: record.transactionHashes.length,
 	});
 	const isPending = record.status === "SUBMITTED";
+	const failedSelections = failedExecutionSelections(record);
 	const isSettled = record.status === "SETTLED";
 	const stableToken = record.plan.chain === "SOLANA" ? "USDC" : "USDG";
 	const totalInput = formatUsd(
@@ -318,6 +323,15 @@ export function ReceiptScreen({
 				</div>
 			</section>
 			<div className="receipt-actions">
+				{failedSelections.length ? (
+					<button
+						type="button"
+						className="button button-primary"
+						onClick={() => onRetryFailed?.(failedSelections)}
+					>
+						<RotateCcw aria-hidden="true" /> Retry failed assets
+					</button>
+				) : null}
 				{isPending ? (
 					<button
 						type="button"
@@ -345,6 +359,19 @@ export function ReceiptScreen({
 			</div>
 		</main>
 	);
+}
+
+export function failedExecutionSelections(record: ExecutionRecord) {
+	return (record.legs ?? [])
+		.filter((leg) => leg.status === "FAILED")
+		.flatMap((leg) =>
+			leg.assetIds.map((assetId) => ({
+				assetId,
+				amountInBaseUnits:
+					record.plan.quotes.find((quote) => quote.assetId === assetId)
+						?.amountInBaseUnits ?? leg.amountInBaseUnits,
+			})),
+		);
 }
 
 function useSettlementConfetti(record?: ExecutionRecord) {

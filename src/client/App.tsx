@@ -160,6 +160,9 @@ export function App({ config }: { config: PublicConfig }) {
 	const [themeSettings, setThemeSettings] = useState(readThemeSettings);
 	const [index, setIndex] = useState(0);
 	const [selectedIds, setSelectedIds] = useState<string[]>([]);
+	const [retrySelections, setRetrySelections] = useState<
+		Array<{ candidate: Candidate; amountInBaseUnits: string }> | undefined
+	>();
 	const [feedTicketSizeUsd, setFeedTicketSizeUsd] = useState<number>();
 	const [periodUsedUsd, setPeriodUsedUsd] = useState(0);
 	const [assetInfoOpen, setAssetInfoOpen] = useState(false);
@@ -305,6 +308,7 @@ export function App({ config }: { config: PublicConfig }) {
 			setFeed(undefined);
 			setIndex(0);
 			setSelectedIds([]);
+			setRetrySelections(undefined);
 			setFeedTicketSizeUsd(undefined);
 			setPeriodUsedUsd(0);
 			setLoadMoreError("");
@@ -477,7 +481,7 @@ export function App({ config }: { config: PublicConfig }) {
 		() => feedBasketSelections(selected, ticketSizeUsd),
 		[selected, ticketSizeUsd],
 	);
-	const executionSelections = feedExecutionSelections;
+	const executionSelections = retrySelections ?? feedExecutionSelections;
 	const reviewCandidates = executionSelections.map(
 		({ candidate }) => candidate,
 	);
@@ -671,6 +675,9 @@ export function App({ config }: { config: PublicConfig }) {
 
 	function removeFeedAsset(assetId: string) {
 		setSelectedIds((ids) => ids.filter((id) => id !== assetId));
+		setRetrySelections((selections) =>
+			selections?.filter((selection) => selection.candidate.assetId !== assetId),
+		);
 		setFeedExhausted(false);
 	}
 
@@ -838,6 +845,28 @@ export function App({ config }: { config: PublicConfig }) {
 								navigate("week");
 								void loadSession(preferences);
 							}
+						}}
+						onRetryFailed={(failed) => {
+							const snapshots = [
+								...receiptCandidates,
+								...reviewCandidates,
+								...candidates,
+							];
+							const next = failed.flatMap((selection) => {
+								const candidate = snapshots.find(
+									(item) => item.assetId === selection.assetId,
+								);
+								return candidate ? [{ candidate, amountInBaseUnits: selection.amountInBaseUnits }] : [];
+							});
+							if (!next.length) {
+								setError("The failed asset snapshot is unavailable. Build a new basket instead.");
+								return;
+							}
+							setSelectedIds(next.map(({ candidate }) => candidate.assetId));
+							setRetrySelections(next);
+							setSettlement(undefined);
+							navigate("week");
+							setStage("review");
 						}}
 					/>
 				) : view === "positions" ? (

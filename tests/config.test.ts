@@ -37,6 +37,16 @@ describe("execution modes", () => {
 		expect(config.liveBroadcastEnabled).toBe(true);
 	});
 
+	it("validates reconciliation cron configuration", () => {
+		expect(() => loadConfig({ ...base, CRON_SECRET: "too-short" })).toThrow();
+		const config = loadConfig({
+			...base,
+			CRON_SECRET: "test-cron-secret-that-is-at-least-32-characters",
+			RECONCILIATION_BATCH_SIZE: "50",
+		});
+		expect(config.RECONCILIATION_BATCH_SIZE).toBe(50);
+	});
+
 	it("rejects local live signing in a production process", () => {
 		expect(() =>
 			loadConfig({

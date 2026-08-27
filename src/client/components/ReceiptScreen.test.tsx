@@ -1,6 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { executionSummary, ReceiptScreen } from "./ReceiptScreen";
+import {
+	executionSummary,
+	failedExecutionSelections,
+	ReceiptScreen,
+} from "./ReceiptScreen";
 
 describe("receipt semantics", () => {
 	it("uses a current empty-receipt state instead of the removed Activity tab", () => {
@@ -38,5 +42,24 @@ describe("receipt semantics", () => {
 				transactionCount: 3,
 			}),
 		).toBe("3 independent Jupiter transactions · 5 swaps");
+	});
+
+	it("retries only definitively failed legs and preserves their quoted amount", () => {
+		const record = {
+			plan: {
+				quotes: [
+					{ assetId: "failed", amountInBaseUnits: "100000" },
+					{ assetId: "unknown", amountInBaseUnits: "200000" },
+				],
+			},
+			legs: [
+				{ status: "FAILED", assetIds: ["failed"], amountInBaseUnits: "100000" },
+				{ status: "UNKNOWN", assetIds: ["unknown"], amountInBaseUnits: "200000" },
+			],
+		} as Parameters<typeof failedExecutionSelections>[0];
+
+		expect(failedExecutionSelections(record)).toEqual([
+			{ assetId: "failed", amountInBaseUnits: "100000" },
+		]);
 	});
 });

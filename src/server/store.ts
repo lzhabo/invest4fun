@@ -107,6 +107,7 @@ export interface StateStore extends ProviderSnapshotCache {
     periodBudgetBaseUnits?: string
   ): Promise<ExecutionRecord>;
   getExecution(id: string): Promise<ExecutionRecord | undefined>;
+	listExecutionsForReconciliation(limit: number): Promise<ExecutionRecord[]>;
   updateExecution(
     id: string,
     status: ExecutionRecord["status"],
@@ -321,6 +322,12 @@ export class MemoryStateStore implements StateStore {
   async getExecution(id: string): Promise<ExecutionRecord | undefined> {
     return this.executions.get(id);
   }
+
+	async listExecutionsForReconciliation(limit: number) {
+		return [...this.executions.values()]
+			.filter((execution) => execution.status === "SUBMITTED")
+			.slice(0, limit);
+	}
 
   async refreshPreparedExecution(
     id: string,

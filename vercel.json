@@ -3,6 +3,9 @@
   "regions": ["fra1"],
   "buildCommand": "npm run build",
   "outputDirectory": "dist/client",
+  "crons": [
+    { "path": "/api/cron/reconcile", "schedule": "0 3 * * *" }
+  ],
   "headers": [
     {
       "source": "/(.*)",
