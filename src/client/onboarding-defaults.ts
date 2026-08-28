@@ -9,7 +9,7 @@ export type NewAccountDraft = {
 	periodLimitChoice: 50;
 	customPeriodLimitInput: string;
 	ticketSizeUsd: number;
-	ticketChoice: 1;
+	ticketChoice: 0.1;
 	customTicketInput: string;
 	riskMode: OnboardingPreferences["riskMode"];
 	assetChoice: "BOTH";
@@ -25,8 +25,8 @@ export function newAccountDraft(): NewAccountDraft {
 		periodLimitUsd: 50,
 		periodLimitChoice: 50,
 		customPeriodLimitInput: "",
-		ticketSizeUsd: 1,
-		ticketChoice: 1,
+		ticketSizeUsd: 0.1,
+		ticketChoice: 0.1,
 		customTicketInput: "",
 		riskMode: "balanced",
 		assetChoice: "BOTH",

@@ -1165,6 +1165,7 @@ export function App({ config }: { config: PublicConfig }) {
 							onRemove={removeFeedAsset}
 							ticketSizeUsd={ticketSizeUsd}
 							periodLimitUsd={availablePeriodBudgetUsd}
+							cadence={preferences?.cadence ?? "weekly"}
 						/>
 					</main>
 				)}

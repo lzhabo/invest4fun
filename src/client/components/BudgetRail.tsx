@@ -1,4 +1,4 @@
-import type { Candidate } from "../../domain/schemas";
+import type { Candidate, OnboardingPreferences } from "../../domain/schemas";
 import { formatTicketSizeUsd } from "../../domain/schemas";
 import { AssetMark } from "./AssetMark";
 import { Close } from "./Icons";
@@ -7,11 +7,13 @@ export function BudgetSummary({
 	selectedCount,
 	ticketSizeUsd,
 	periodLimitUsd,
+	cadence,
 	className = "",
 }: {
 	selectedCount: number;
 	ticketSizeUsd: number;
 	periodLimitUsd: number;
+	cadence: OnboardingPreferences["cadence"];
 	className?: string;
 }) {
 	const remaining = Math.max(
@@ -20,17 +22,23 @@ export function BudgetSummary({
 	);
 	const remainingPercent =
 		periodLimitUsd > 0 ? (remaining / periodLimitUsd) * 100 : 0;
+	const periodLabel =
+		cadence === "daily"
+			? "Today"
+			: cadence === "weekly"
+				? "This week"
+				: "This month";
 
 	return (
 		<div className={`rail-budget${className ? ` ${className}` : ""}`}>
 			<span>
-				This month limit: <strong>{formatTicketSizeUsd(remaining)}</strong>{" "}
+				{periodLabel} limit: <strong>{formatTicketSizeUsd(remaining)}</strong>{" "}
 				USDC left
 			</span>
 			<span
 				className="rail-budget-progress"
 				role="progressbar"
-				aria-label="Monthly budget left"
+				aria-label={`${periodLabel} budget left`}
 				aria-valuemin={0}
 				aria-valuemax={periodLimitUsd}
 				aria-valuenow={remaining}
@@ -46,11 +54,13 @@ export function BudgetRail({
 	onRemove,
 	ticketSizeUsd,
 	periodLimitUsd,
+	cadence,
 }: {
 	selected: Candidate[];
 	onRemove: (assetId: string) => void;
 	ticketSizeUsd: number;
 	periodLimitUsd: number;
+	cadence: OnboardingPreferences["cadence"];
 }) {
 	return (
 		<aside className="budget-rail" aria-label="Basket and providers">
@@ -58,6 +68,7 @@ export function BudgetRail({
 				selectedCount={selected.length}
 				ticketSizeUsd={ticketSizeUsd}
 				periodLimitUsd={periodLimitUsd}
+				cadence={cadence}
 			/>
 			<div className="budget-meta">
 				<span className="quote-provider">

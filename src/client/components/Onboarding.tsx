@@ -584,7 +584,7 @@ function QuestionFlow({
 							>
 								<span>
 									<b>{option.title}</b>
-									{option.id === 1 ? <em>Easy start</em> : null}
+									{option.id === 0.1 ? <em>Easy start</em> : null}
 								</span>
 								<small>{option.description}</small>
 								{draft.ticketChoice === option.id ? <Check /> : null}
