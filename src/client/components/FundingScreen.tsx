@@ -114,7 +114,15 @@ export function FundingScreen({
 					>
 						Continue to feed <ArrowRight aria-hidden="true" />
 					</button>
-				) : null}
+				) : (
+					<button
+						type="button"
+						className="onboarding-text-button"
+						onClick={onContinue}
+					>
+						Browse feed without funding
+					</button>
+				)}
 			</div>
 		</main>
 	);
