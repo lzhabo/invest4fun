@@ -50,6 +50,7 @@ import {
 	SOLANA_ASSET_REGISTRY,
 	SOLANA_CLUSTER,
 	SOLANA_NATIVE_MINT,
+	SOLANA_USDC_ASSET,
 	SOLANA_USDC_DECIMALS,
 	SOLANA_USDC_MINT,
 	solanaAssetById,
@@ -473,19 +474,38 @@ export function createApp(deps: AppDependencies) {
 				.map((token) => {
 					const mint = token.tokenAddress ?? SOLANA_NATIVE_MINT;
 					const known = knownByMint.get(mint);
+					const stablecoin =
+						mint === SOLANA_USDC_MINT ? SOLANA_USDC_ASSET : undefined;
 					const balanceBaseUnits = hexBalanceToDecimal(token.tokenBalance);
 					const usdPrice = token.tokenPrices?.find(
 						(price) => price.currency.toLowerCase() === "usd",
 					);
 					return {
-						assetId: known?.assetId ?? `sol:mainnet:${mint}`,
+						assetId:
+							known?.assetId ?? stablecoin?.assetId ?? `sol:mainnet:${mint}`,
 						mint,
-						symbol: known?.symbol ?? token.tokenMetadata?.symbol ?? "Unknown",
-						name: known?.name ?? token.tokenMetadata?.name ?? "Unknown token",
-						decimals: known?.decimals ?? token.tokenMetadata?.decimals ?? 0,
+						symbol:
+							known?.symbol ??
+							stablecoin?.symbol ??
+							token.tokenMetadata?.symbol ??
+							"Unknown",
+						name:
+							known?.name ??
+							stablecoin?.name ??
+							token.tokenMetadata?.name ??
+							"Unknown token",
+						decimals:
+							known?.decimals ??
+							stablecoin?.decimals ??
+							token.tokenMetadata?.decimals ??
+							0,
 						balanceBaseUnits,
 						iconUrl: token.tokenMetadata?.logo ?? undefined,
-						priceUsd: usdPrice ? Number(usdPrice.value) : undefined,
+						priceUsd: usdPrice
+							? Number(usdPrice.value)
+							: stablecoin
+								? 1
+								: undefined,
 						priceUpdatedAt: usdPrice?.lastUpdatedAt,
 					};
 				})

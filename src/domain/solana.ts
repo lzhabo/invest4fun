@@ -4,6 +4,13 @@ export const SOLANA_CHAIN = "SOLANA" as const;
 export const SOLANA_USDC_MINT =
 	"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" as const;
 export const SOLANA_USDC_DECIMALS = 6;
+export const SOLANA_USDC_ASSET = {
+	assetId: "sol:mainnet:USDC",
+	symbol: "USDC",
+	name: "USD Coin",
+	address: SOLANA_USDC_MINT,
+	decimals: SOLANA_USDC_DECIMALS,
+} as const;
 export const SOLANA_NATIVE_MINT =
 	"So11111111111111111111111111111111111111112" as const;
 

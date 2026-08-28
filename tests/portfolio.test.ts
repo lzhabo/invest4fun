@@ -1,23 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
 	calculatePortfolioSnapshot,
-	isSolanaInvestingCash,
+	selectPortfolioHoldings,
 } from "../src/client/portfolio.js";
 
-describe("isSolanaInvestingCash", () => {
-	it("keeps USDC funding cash out of read-only positions", () => {
+describe("selectPortfolioHoldings", () => {
+	it("includes positive USDC cash in the visible portfolio", () => {
+		const usdc = { assetId: "sol:mainnet:USDC", symbol: "USDC" };
+		const hype = { assetId: "sol:mainnet:HYPE", symbol: "HYPE" };
+		const empty = { assetId: "sol:mainnet:EMPTY", symbol: "EMPTY" };
+
 		expect(
-			isSolanaInvestingCash({
-				chain: "SOLANA",
-				contract: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+			selectPortfolioHoldings([usdc, hype, empty], {
+				[usdc.assetId]: "900047",
+				[hype.assetId]: "1209461",
+				[empty.assetId]: "0",
 			}),
-		).toBe(true);
-		expect(
-			isSolanaInvestingCash({
-				chain: "SOLANA",
-				contract: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
-			}),
-		).toBe(false);
+		).toEqual([usdc, hype]);
 	});
 });
 

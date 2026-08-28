@@ -1,10 +1,14 @@
-import { SOLANA_USDC_MINT } from "../domain/solana.js";
-
-export function isSolanaInvestingCash(holding: {
-	chain: string;
-	contract: string;
-}): boolean {
-	return holding.chain === "SOLANA" && holding.contract === SOLANA_USDC_MINT;
+export function selectPortfolioHoldings<T extends { assetId: string }>(
+	assets: T[],
+	balances: Record<string, string>,
+): T[] {
+	return assets.filter((asset) => {
+		try {
+			return BigInt(balances[asset.assetId] ?? "0") > 0n;
+		} catch {
+			return false;
+		}
+	});
 }
 
 export interface PortfolioAsset {

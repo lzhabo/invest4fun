@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { formatUnits } from "viem";
 import type { Candidate } from "../../domain/schemas";
 import { api } from "../api";
-import { isSolanaInvestingCash } from "../portfolio";
+import { selectPortfolioHoldings } from "../portfolio";
 import { AssetMark } from "./AssetMark";
 import { PortfolioPageSkeleton } from "./PageSkeletons";
 
@@ -113,9 +113,7 @@ export function PositionsScreen({
 		};
 	}, [candidates, demoMode, wallet]);
 
-	const holdings = indexedPortfolio
-		.filter((candidate) => !isSolanaInvestingCash(candidate))
-		.filter((candidate) => BigInt(balances[candidate.assetId] ?? "0") > 0n);
+	const holdings = selectPortfolioHoldings(indexedPortfolio, balances);
 	const portfolioValueUsd = holdings.reduce(
 		(total, candidate) =>
 			total +
