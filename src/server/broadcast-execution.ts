@@ -1,4 +1,7 @@
-import type { ExecutionProvider } from "./adapters/types.js";
+import type {
+	ExecutionProvider,
+	SolanaPreparedTransaction,
+} from "./adapters/types.js";
 import { ExecutionProviderError } from "./adapters/types.js";
 import type { ExecutionRecord, StateStore } from "./store.js";
 
@@ -27,7 +30,11 @@ export async function broadcastPreparedExecution(input: {
 	}
 	const now = input.now ?? (() => new Date());
 	let current = input.execution;
-	let hasUnknownBroadcast = false;
+	const claimed = [] as Array<{
+		index: number;
+		prepared: SolanaPreparedTransaction;
+		signed: string;
+	}>;
 	for (const [index, prepared] of preparedTransactions.entries()) {
 		const signed = input.signedTransactions[index] ?? "";
 		const normalized = {
@@ -41,32 +48,43 @@ export async function broadcastPreparedExecution(input: {
 			{
 				type: "CLAIM_BROADCAST",
 				signature,
+				signedTransactionBase64: signed,
 				at: now().toISOString(),
 			},
 		);
-		try {
-			await submit.call(input.provider, normalized, signed);
+		claimed.push({ index, prepared: normalized, signed });
+	}
+	const submissions = await Promise.allSettled(
+		claimed.map(({ prepared, signed }) =>
+			submit.call(input.provider, prepared, signed),
+		),
+	);
+	let hasUnknownBroadcast = false;
+	for (const [position, result] of submissions.entries()) {
+		const claim = claimed[position];
+		if (!claim) continue;
+		if (result.status === "fulfilled") {
 			current = await input.store.transitionExecutionLeg(
 				input.execution.plan.executionId,
-				index,
+				claim.index,
 				{ type: "BROADCAST_ACCEPTED", at: now().toISOString() },
 			);
-		} catch (error) {
-			hasUnknownBroadcast = true;
-			current = await input.store.transitionExecutionLeg(
-				input.execution.plan.executionId,
-				index,
-				{
-					type: "BROADCAST_UNKNOWN",
-					at: now().toISOString(),
-					failureCode:
-						error instanceof ExecutionProviderError
-							? error.code
-							: "BROADCAST_ERROR",
-					failureMessage: "Broadcast outcome requires reconciliation.",
-				},
-			);
+			continue;
 		}
+		hasUnknownBroadcast = true;
+		current = await input.store.transitionExecutionLeg(
+			input.execution.plan.executionId,
+			claim.index,
+			{
+				type: "BROADCAST_UNKNOWN",
+				at: now().toISOString(),
+				failureCode:
+					result.reason instanceof ExecutionProviderError
+						? result.reason.code
+						: "BROADCAST_ERROR",
+				failureMessage: "Broadcast outcome requires reconciliation.",
+			},
+		);
 	}
 	return { execution: current, hasUnknownBroadcast };
 }

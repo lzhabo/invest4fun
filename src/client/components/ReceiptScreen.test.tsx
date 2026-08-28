@@ -53,13 +53,40 @@ describe("receipt semantics", () => {
 				],
 			},
 			legs: [
-				{ status: "FAILED", assetIds: ["failed"], amountInBaseUnits: "100000" },
-				{ status: "UNKNOWN", assetIds: ["unknown"], amountInBaseUnits: "200000" },
+				{
+					status: "FAILED",
+					failureCode: "SOLANA_TRANSACTION_FAILED",
+					assetIds: ["failed"],
+					amountInBaseUnits: "100000",
+				},
+				{
+					status: "UNKNOWN",
+					assetIds: ["unknown"],
+					amountInBaseUnits: "200000",
+				},
 			],
 		} as Parameters<typeof failedExecutionSelections>[0];
 
 		expect(failedExecutionSelections(record)).toEqual([
 			{ assetId: "failed", amountInBaseUnits: "100000" },
 		]);
+	});
+
+	it("never retries a finalized transaction with delayed output verification", () => {
+		const record = {
+			plan: {
+				quotes: [{ assetId: "uncertain", amountInBaseUnits: "100000" }],
+			},
+			legs: [
+				{
+					status: "OUTPUT_UNVERIFIED",
+					failureCode: "OUTPUT_UNVERIFIED",
+					assetIds: ["uncertain"],
+					amountInBaseUnits: "100000",
+				},
+			],
+		} as Parameters<typeof failedExecutionSelections>[0];
+
+		expect(failedExecutionSelections(record)).toEqual([]);
 	});
 });

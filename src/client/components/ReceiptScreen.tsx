@@ -37,6 +37,32 @@ export function ReceiptScreen({
 	) => void;
 }) {
 	const showConfetti = useSettlementConfetti(record);
+	const reconciliationInFlight = useRef(false);
+	const onResumeRef = useRef(onResume);
+	onResumeRef.current = onResume;
+	const shouldReconcile =
+		record?.status === "SUBMITTED" ||
+		record?.legs?.some(
+			(leg) => leg.failureCode === "OUTPUT_VALIDATION_FAILED",
+		) === true;
+
+	useEffect(() => {
+		if (!shouldReconcile) return;
+		const refresh = async () => {
+			if (reconciliationInFlight.current) return;
+			reconciliationInFlight.current = true;
+			try {
+				await onResumeRef.current();
+			} catch {
+				// The receipt remains actionable while background verification retries.
+			} finally {
+				reconciliationInFlight.current = false;
+			}
+		};
+		void refresh();
+		const timer = window.setInterval(() => void refresh(), 5_000);
+		return () => window.clearInterval(timer);
+	}, [shouldReconcile]);
 
 	if (!record) {
 		return (
@@ -74,7 +100,6 @@ export function ReceiptScreen({
 	const outputsByAssetId = new Map(
 		record.settledOutputs.map((output) => [output.assetId, output]),
 	);
-	const transactionHash = record.transactionHashes.at(-1);
 	const executionDescription = executionSummary({
 		demoMode,
 		submissionMode: record.submissionMode,
@@ -100,9 +125,6 @@ export function ReceiptScreen({
 	const receiptDescription = isSettled
 		? settledDescription
 		: receiptStatus.description;
-	const transactionUrl = transactionHash
-		? explorerUrl(transactionHash)
-		: undefined;
 
 	return (
 		<main className="receipt-page">
@@ -140,6 +162,7 @@ export function ReceiptScreen({
 				{selected.map((candidate) => {
 					const output = outputsByAssetId.get(candidate.assetId);
 					const isSuccess = output?.status === "success";
+					const isUnverified = output?.status === "unverified";
 					const quote =
 						candidate.quote ??
 						record.plan.quotes.find(
@@ -189,7 +212,9 @@ export function ReceiptScreen({
 										<small>received</small>
 									</>
 								) : output?.status === "failed" ? (
-									<span>Not settled</span>
+									<span>Transaction failed</span>
+								) : isUnverified ? (
+									<span>Verification delayed</span>
 								) : isTerminal ? (
 									<span>No output recorded</span>
 								) : (
@@ -294,33 +319,39 @@ export function ReceiptScreen({
 						</div>
 					</div>
 				</details>
-				<div className="receipt-transaction-row">
-					<span className="receipt-detail-icon">
-						<FileText aria-hidden="true" />
-					</span>
-					<span>
-						<b>
-							{record.submissionMode === "SEQUENTIAL"
-								? "Latest transaction receipt"
-								: "Transaction receipt"}
-						</b>
-						<small>
-							{transactionHash
-								? shortHash(transactionHash)
-								: "Awaiting operation hash"}
-						</small>
-					</span>
-					{transactionUrl && !demoMode ? (
-						<a
-							href={transactionUrl}
-							target="_blank"
-							rel="noreferrer"
-							aria-label={`Open transaction receipt on ${chainLabel} in a new tab`}
-						>
-							<ExternalLink aria-hidden="true" />
-						</a>
-					) : null}
-				</div>
+				{record.transactionHashes.length ? (
+					record.transactionHashes.map((transactionHash, index) => (
+						<div className="receipt-transaction-row" key={transactionHash}>
+							<span className="receipt-detail-icon">
+								<FileText aria-hidden="true" />
+							</span>
+							<span>
+								<b>Transaction {index + 1}</b>
+								<small>{shortHash(transactionHash)}</small>
+							</span>
+							{!demoMode ? (
+								<a
+									href={explorerUrl(transactionHash)}
+									target="_blank"
+									rel="noreferrer"
+									aria-label={`Open transaction ${index + 1} on ${chainLabel} in a new tab`}
+								>
+									<ExternalLink aria-hidden="true" />
+								</a>
+							) : null}
+						</div>
+					))
+				) : (
+					<div className="receipt-transaction-row">
+						<span className="receipt-detail-icon">
+							<FileText aria-hidden="true" />
+						</span>
+						<span>
+							<b>Transaction receipt</b>
+							<small>Awaiting operation hash</small>
+						</span>
+					</div>
+				)}
 			</section>
 			<div className="receipt-actions">
 				{failedSelections.length ? (
@@ -363,7 +394,11 @@ export function ReceiptScreen({
 
 export function failedExecutionSelections(record: ExecutionRecord) {
 	return (record.legs ?? [])
-		.filter((leg) => leg.status === "FAILED")
+		.filter(
+			(leg) =>
+				leg.status === "FAILED" &&
+				leg.failureCode === "SOLANA_TRANSACTION_FAILED",
+		)
 		.flatMap((leg) =>
 			leg.assetIds.map((assetId) => ({
 				assetId,
@@ -482,11 +517,11 @@ function receiptCopy(
 ) {
 	if (status === "SUBMITTED") {
 		return {
-			title: "Basket submitted",
+			title: "Purchase processing",
 			description:
 				submissionMode === "BATCH"
-					? `Your Investmade Wallet broadcast one atomic operation. Waiting for ${chainLabel} settlement.`
-					: `Your Investmade Wallet broadcast independent swaps. Waiting for ${chainLabel} settlement.`,
+					? `One transaction was submitted. ${chainLabel} verification continues in the background.`
+					: `Your transactions were submitted. ${chainLabel} verification continues in the background.`,
 		};
 	}
 	if (status === "SETTLED") {
@@ -503,7 +538,7 @@ function receiptCopy(
 	if (status === "PARTIAL") {
 		return {
 			title: "Basket partially settled",
-			description: `${successfulLegs} of ${totalLegs} legs reached a verified terminal state. Review the receipt before trying again.`,
+			description: `${successfulLegs} of ${totalLegs} assets were purchased. At least one separate transaction failed onchain.`,
 		};
 	}
 	if (status === "FAILED") {

@@ -35,12 +35,24 @@ describe("AssetMark accessibility", () => {
 		).toEqual(["/assets/chains/solana.svg"]);
 	});
 
+	it("uses a local mint-bound cbBTC icon before remote metadata", () => {
+		expect(
+			assetLogoSources({
+				assetId: "sol:mainnet:cbbtcf3aa214zXHbiAZQwf4122FBYbraNdFqgw4iMij",
+				symbol: "cbBTC",
+				iconUrl: "https://ipfs.io/ipfs/example",
+			}),
+		).toEqual([
+			"/assets/tokens/cbbtc.svg",
+			"https://ipfs.io/ipfs/example",
+			"https://cloudflare-ipfs.com/ipfs/example",
+			"https://gateway.pinata.cloud/ipfs/example",
+		]);
+	});
+
 	it("uses a deterministic monogram when an unknown asset has no image", () => {
 		const html = renderToStaticMarkup(
-			<AssetMark
-				assetId="sol:mainnet:unknown-mint"
-				symbol="???"
-			/>,
+			<AssetMark assetId="sol:mainnet:unknown-mint" symbol="???" />,
 		);
 
 		expect(html).toContain('data-asset-fallback="sol:mainnet:unknown-mint"');

@@ -10,6 +10,10 @@ import { formatTicketSizeUsd } from "../../domain/schemas";
 import type { ExecutionRecord, FeedResponse, WeeklySession } from "../api";
 import { ApiError, api } from "../api";
 import { liveCheckoutUi } from "../live-checkout-ui";
+import {
+	reviewInteractionsLocked,
+	type ReviewExecutionPhase,
+} from "../review-interaction-lock";
 import { shouldOfferTopUp } from "../wallet-funding";
 import {
 	executionMatchesReviewBasket,
@@ -66,9 +70,8 @@ export function ReviewScreen({
 	const [record, setRecord] = useState<ExecutionRecord>();
 	const [preparedBasketKey, setPreparedBasketKey] = useState("");
 	const [loading, setLoading] = useState(true);
-	const [phase, setPhase] = useState<
-		"idle" | "refreshing" | "simulating" | "signing" | "settling"
-	>("refreshing");
+	const [phase, setPhase] = useState<ReviewExecutionPhase>("refreshing");
+	const [confirmationOpen, setConfirmationOpen] = useState(false);
 	const [error, setError] = useState("");
 	const [errorCode, setErrorCode] = useState("");
 	const [unavailableAssetIds, setUnavailableAssetIds] = useState<string[]>([]);
@@ -129,6 +132,10 @@ export function ReviewScreen({
 		checkoutUi.disabled &&
 		activeRecord?.status === "PREPARED" &&
 		solanaTransactions.length > 0;
+	const interactionsLocked = reviewInteractionsLocked({
+		phase,
+		hasPreparedExecution: Boolean(activeRecord),
+	});
 	useEffect(() => {
 		const timer = window.setInterval(() => setNow(Date.now()), 1_000);
 		return () => window.clearInterval(timer);
@@ -359,6 +366,7 @@ export function ReviewScreen({
 	}
 
 	function removeAsset(assetId: string) {
+		if (interactionsLocked) return;
 		preparationAttempt.current += 1;
 		setRecord(undefined);
 		setPreparedBasketKey("");
@@ -370,7 +378,21 @@ export function ReviewScreen({
 		onRemove(assetId);
 	}
 
+	function editPreparedBasket() {
+		if (loading || activeRecord?.status !== "PREPARED") return;
+		preparationAttempt.current += 1;
+		setConfirmationOpen(false);
+		setRecord(undefined);
+		setPreparedBasketKey("");
+		setError("");
+		setErrorCode("");
+		setUnavailableAssetIds([]);
+		onExecutionInvalidated();
+		onBack();
+	}
+
 	async function confirmLive() {
+		setConfirmationOpen(false);
 		if (signingBlocked) {
 			setError(checkoutUi.warning);
 			return;
@@ -408,6 +430,9 @@ export function ReviewScreen({
 			setPhase("signing");
 			const signedTransactions: string[] = [];
 			for (const [index, prepared] of solanaTransactions.entries()) {
+				if (signingBasketKey !== currentBasketKey.current) {
+					throw new Error("BASKET_CHANGED_DURING_SIGNING");
+				}
 				const { signedTransaction } = await signTransaction({
 					transaction: base64ToBytes(prepared.unsignedTransactionBase64),
 					wallet: solanaWallet,
@@ -426,25 +451,36 @@ export function ReviewScreen({
 				});
 				signedTransactions.push(bytesToBase64(signedTransaction));
 			}
+			if (
+				signingBasketKey !== currentBasketKey.current ||
+				!executionQuotesSafeToSubmit(activeRecord) ||
+				!(await executionPlanHashMatchesReviewBasket(activeRecord, basket))
+			) {
+				throw new Error("BASKET_OR_QUOTES_CHANGED_BEFORE_SUBMIT");
+			}
 			const submitted = await api.submitSolana(
 				activeRecord.plan.executionId,
 				signedTransactions,
 			);
 			setRecord(submitted);
 			onExecutionChange(submitted);
-			if (["SETTLED", "PARTIAL", "FAILED"].includes(submitted.status)) {
-				onSettled(submitted);
-				return;
-			}
-			setPhase("settling");
-			const reconciled = await reconcileUntilTerminal(
-				activeRecord.plan.executionId,
-			);
-			setRecord(reconciled);
-			onExecutionChange(reconciled);
-			onSettled(reconciled);
+			onSettled(submitted);
 		} catch (caught) {
-			setError(executionErrorMessage(caught));
+			if (
+				caught instanceof Error &&
+				[
+					"BASKET_CHANGED_DURING_SIGNING",
+					"BASKET_OR_QUOTES_CHANGED_BEFORE_SUBMIT",
+				].includes(caught.message)
+			) {
+				setError(
+					"The quote expired before broadcast. Building a fresh transaction plan.",
+				);
+				autoPrepareStarted.current = false;
+				await prepare();
+			} else {
+				setError(executionErrorMessage(caught));
+			}
 		} finally {
 			setLoading(false);
 			setPhase("idle");
@@ -477,365 +513,463 @@ export function ReviewScreen({
 	}
 
 	return (
-		<main className="review-page">
-			<section className="review-ledger">
-				<header>
-					<h1>Review your basket</h1>
-					<p>
-						{hasExecutableTransaction
-							? `Fresh Jupiter quotes are ready for your wallet to confirm.${perLegSolana ? " Swaps settle independently, so partial completion is possible." : ""}`
-							: liveExecution
-								? "No transaction is prepared yet. Resolve the issue below, then refresh the quotes."
-								: "Demo quotes are ready for a simulated confirmation."}
-					</p>
-					{error ? (
-						<div className="review-error-actions">
-							<p className="review-error" role="alert">
-								{error}
-							</p>
-							{shouldOfferTopUp(errorCode) ? (
-								<button
-									type="button"
-									className="button button-outline"
-									onClick={onTopUp}
-								>
-									Top up wallet
-								</button>
-							) : null}
-						</div>
-					) : null}
-				</header>
-				<div className="ledger-table">
-					<div className="ledger-row ledger-labels">
-						<span>Asset</span>
-						<span>Input (you pay)</span>
-						<span>Estimated output</span>
-						<span>Minimum output</span>
-						<span>Impact</span>
-					</div>
-					{selected.map((candidate) => {
-						const quote = quoteByAssetId.get(candidate.assetId);
-						const unavailable = unavailableAssetIds.includes(candidate.assetId);
-						return (
-							<div className="ledger-row" key={candidate.assetId}>
-								<span className="ledger-asset">
-									<AssetMark
-										assetId={candidate.assetId}
-										symbol={candidate.symbol}
-										iconUrl={candidate.iconUrl}
-										size="sm"
-										decorative
-									/>
-									<b>
-										{candidate.symbol}
-										<small>{candidate.name}</small>
-									</b>
-								</span>
-								<span className="ledger-value ledger-value-pay">
-									<small className="ledger-mobile-label">You pay</small>
-									<span className="ledger-value-amount">
-										<strong>
-											{formatTicketSizeUsd(
-												Number(
-													formatUnits(
-														BigInt(
-															amountByAssetId.get(candidate.assetId) ?? "0",
-														),
-														6,
-													),
-												),
-											)}
-										</strong>{" "}
-										{stableToken}
-									</span>
-								</span>
-								<span className="ledger-value ledger-value-receive">
-									<small className="ledger-mobile-label">You receive</small>
-									<span
-										className={`ledger-value-amount${unavailable ? " is-unavailable" : ""}`}
-									>
-										{unavailable ? (
-											<strong>No route</strong>
-										) : (
-											<>
-												<strong>
-													{quote
-														? formatOutput(
-																quote.estimatedAmountOut,
-																candidate.decimals,
-															)
-														: "—"}
-												</strong>{" "}
-												{candidate.symbol}
-											</>
-										)}
-									</span>
-								</span>
-								<span>
-									<strong>
-										{quote
-											? formatOutput(quote.minimumAmountOut, candidate.decimals)
-											: "—"}
-									</strong>{" "}
-									{candidate.symbol}
-								</span>
-								<span className="blue-text">
-									{quote ? `${(quote.priceImpactBps / 100).toFixed(2)}%` : "—"}
-								</span>
-								<button
-									type="button"
-									className="ledger-remove"
-									onClick={() => removeAsset(candidate.assetId)}
-									aria-label={`Remove ${candidate.symbol}`}
-								>
-									<Close />
-								</button>
-							</div>
-						);
-					})}
-				</div>
-				<div className="ledger-totals">
-					<div>
-						<span>Wallet balance</span>
-						<strong>
-							{walletBalance === undefined
-								? "—"
-								: formatTicketSizeUsd(walletBalance)}
-						</strong>
-						<small>
-							<b>{stableToken}</b>
-						</small>
-					</div>
-					<div>
-						<span>Total input</span>
-						<strong>{formatTicketSizeUsd(total)}</strong>
-						<small>
-							<b>{stableToken}</b> to invest
-						</small>
-					</div>
-					<div>
-						<span>Remainder</span>
-						<strong>
-							{formatTicketSizeUsd(
-								Math.round((periodLimitUsd - total) * 100) / 100,
-							)}
-						</strong>
-						<small>
-							<b>{stableToken}</b>
-						</small>
-					</div>
-				</div>
-			</section>
-
-			<aside className="policy-rail">
-				<h2>Policy checks</h2>
-				<div
-					className={`live-execution-notice${checkoutUi.disabled ? " is-disabled" : ""}`}
-					role="status"
-				>
-					<strong>{checkoutUi.label}</strong>
-					<span>{checkoutUi.warning}</span>
-				</div>
-				{[
-					{
-						label: "Assets eligible",
-						value: selected.length
-							? `${selected.length} / ${selected.length}`
-							: "No assets selected",
-						ok: selected.length > 0,
-					},
-					{
-						label: quotesSafeToSign
-							? "Quotes fresh"
-							: quotesFresh
-								? "Quote nearly expired"
-								: "Preview expired",
-						value: quotesSafeToSign
-							? `${Math.ceil(quoteExpiry / 1000)}s`
-							: "Refresh required",
-						ok: quotesSafeToSign,
-					},
-					{
-						label: "Budget within limit",
-						value: `${formatTicketSizeUsd(total)} / ${formatTicketSizeUsd(periodLimitUsd)} ${stableToken}`,
-						ok: selected.length > 0,
-					},
-					{
-						label: "Execution provider",
-						value: "Jupiter",
-						ok: true,
-					},
-					{
-						label: "Solana · Mainnet",
-						value: "Connected",
-						ok: true,
-					},
-					{
-						label: hasExecutableTransaction
-							? perLegSolana
-								? "Independent Solana swaps"
-								: "Atomic Solana transaction"
-							: liveExecution
-								? "Live execution"
-								: "Demo execution",
-						value: hasExecutableTransaction
-							? executionWalletReady
-								? "Ready"
-								: "Activation required"
-							: liveExecution
-								? "Quotes required"
-								: "Simulated",
-						ok: hasExecutableTransaction
-							? executionWalletReady
-							: !liveExecution,
-					},
-				].map(({ label, value, ok }) => (
-					<div className="policy-row" key={label}>
-						<span
-							className={ok ? "check-circle" : "check-circle warning-circle"}
-						>
-							{ok ? <Check /> : "!"}
-						</span>
-						<b>{label}</b>
-						<em>{value}</em>
-					</div>
-				))}
-				{!liveExecution ? (
-					<div className="wallet-boundary">
-						<Shield />
+		<>
+			{confirmationOpen && activeRecord?.status === "PREPARED" ? (
+				<div className="checkout-confirmation-overlay" role="presentation">
+					<section
+						className="checkout-confirmation"
+						role="dialog"
+						aria-modal="true"
+						aria-labelledby="checkout-confirmation-title"
+					>
+						<span className="onboarding-kicker">Mainnet · Real funds</span>
+						<h2 id="checkout-confirmation-title">Confirm your basket</h2>
 						<p>
-							<b>Demo only · no broadcast.</b>
-							<br />
-							This simulates basket confirmation and settlement without moving
-							funds.
+							You are investing {formatTicketSizeUsd(total)} USDC across{" "}
+							{selected.length} assets in {solanaTransactions.length}{" "}
+							{solanaTransactions.length === 1 ? "transaction" : "transactions"}
+							.
 						</p>
-					</div>
-				) : null}
-				<div className="proof-block">
-					<h3>
-						{feed.proof.teeVerified
-							? "0G Private Allocation Jury"
-							: "Personal feed ranking"}
-					</h3>
-					<p>
-						<span>Ranking model</span>
-						<b>{feed.proof.model}</b>
-					</p>
-					<p>
-						<span>Provider</span>
-						<b>
-							{feed.proof.teeVerified
-								? shortHash(feed.proof.provider)
-								: "Local fixture"}
-						</b>
-					</p>
-					<p>
-						<span>Input commitment</span>
-						<b>{shortHash(feed.proof.inputCommitment)}</b>
-					</p>
-					<p>
-						<span>Output commitment</span>
-						<b>{shortHash(feed.proof.outputCommitment)}</b>
-					</p>
-					<p>
-						<span>TEE verified</span>
-						<b>
-							{feed.proof.teeVerified ? "Verified" : "Not available in demo"}
-						</b>
-					</p>
-					{feed.proof.teeVerified ? (
-						<div className="proof-links">
-							<a
-								href={zeroGProviderUrl(feed.proof.provider)}
-								target="_blank"
-								rel="noreferrer"
+						<div className="checkout-confirmation-groups">
+							{solanaTransactions.map((transaction, index) => (
+								<div key={transaction.messageCommitment}>
+									<strong>Transaction {index + 1}</strong>
+									<span>
+										{transaction.expectedBalanceChanges
+											.map(
+												(change) =>
+													selected.find(
+														(item) => item.assetId === change.assetId,
+													)?.symbol,
+											)
+											.filter(Boolean)
+											.join(", ")}
+									</span>
+								</div>
+							))}
+						</div>
+						<p>
+							Estimated network fee: approximately{" "}
+							{formatSolFee(solanaTransactions.length)} SOL. Final fee may vary
+							slightly. Quotes expire in{" "}
+							{Math.max(0, Math.ceil(quoteExpiry / 1_000))}s.
+						</p>
+						<div className="checkout-confirmation-actions">
+							<button
+								type="button"
+								className="button button-outline"
+								onClick={editPreparedBasket}
 							>
-								View TEE provider on 0G Explorer ↗
-							</a>
-							<a href="https://0g.ai/product" target="_blank" rel="noreferrer">
-								How 0G private inference works ↗
-							</a>
+								Edit basket
+							</button>
+							<button
+								type="button"
+								className="button button-quiet"
+								onClick={() => setConfirmationOpen(false)}
+							>
+								Cancel
+							</button>
+							<button
+								type="button"
+								className="button button-primary"
+								onClick={() => void confirmLive()}
+								disabled={!quotesSafeToSign}
+							>
+								Confirm &amp; sign
+							</button>
+						</div>
+					</section>
+				</div>
+			) : null}
+			<main className="review-page">
+				<section className="review-ledger">
+					<header>
+						<h1>Review your basket</h1>
+						<p>
+							{hasExecutableTransaction
+								? `Fresh Jupiter quotes are ready for your wallet to confirm.${perLegSolana ? " Swaps settle independently, so partial completion is possible." : ""}`
+								: liveExecution
+									? "No transaction is prepared yet. Resolve the issue below, then refresh the quotes."
+									: "Demo quotes are ready for a simulated confirmation."}
+						</p>
+						{error ? (
+							<div className="review-error-actions">
+								<p className="review-error" role="alert">
+									{error}
+								</p>
+								{shouldOfferTopUp(errorCode) ? (
+									<button
+										type="button"
+										className="button button-outline"
+										onClick={onTopUp}
+									>
+										Top up wallet
+									</button>
+								) : null}
+							</div>
+						) : null}
+					</header>
+					<div className="ledger-table">
+						<div className="ledger-row ledger-labels">
+							<span>Asset</span>
+							<span>Input (you pay)</span>
+							<span>Estimated output</span>
+							<span>Minimum output</span>
+							<span>Impact</span>
+						</div>
+						{selected.map((candidate) => {
+							const quote = quoteByAssetId.get(candidate.assetId);
+							const unavailable = unavailableAssetIds.includes(
+								candidate.assetId,
+							);
+							return (
+								<div className="ledger-row" key={candidate.assetId}>
+									<span className="ledger-asset">
+										<AssetMark
+											assetId={candidate.assetId}
+											symbol={candidate.symbol}
+											iconUrl={candidate.iconUrl}
+											size="sm"
+											decorative
+										/>
+										<b>
+											{candidate.symbol}
+											<small>{candidate.name}</small>
+										</b>
+									</span>
+									<span className="ledger-value ledger-value-pay">
+										<small className="ledger-mobile-label">You pay</small>
+										<span className="ledger-value-amount">
+											<strong>
+												{formatTicketSizeUsd(
+													Number(
+														formatUnits(
+															BigInt(
+																amountByAssetId.get(candidate.assetId) ?? "0",
+															),
+															6,
+														),
+													),
+												)}
+											</strong>{" "}
+											{stableToken}
+										</span>
+									</span>
+									<span className="ledger-value ledger-value-receive">
+										<small className="ledger-mobile-label">You receive</small>
+										<span
+											className={`ledger-value-amount${unavailable ? " is-unavailable" : ""}`}
+										>
+											{unavailable ? (
+												<strong>No route</strong>
+											) : (
+												<>
+													<strong>
+														{quote
+															? formatOutput(
+																	quote.estimatedAmountOut,
+																	candidate.decimals,
+																)
+															: "—"}
+													</strong>{" "}
+													{candidate.symbol}
+												</>
+											)}
+										</span>
+									</span>
+									<span>
+										<strong>
+											{quote
+												? formatOutput(
+														quote.minimumAmountOut,
+														candidate.decimals,
+													)
+												: "—"}
+										</strong>{" "}
+										{candidate.symbol}
+									</span>
+									<span className="blue-text">
+										{quote
+											? `${(quote.priceImpactBps / 100).toFixed(2)}%`
+											: "—"}
+									</span>
+									<button
+										type="button"
+										className="ledger-remove"
+										onClick={() => removeAsset(candidate.assetId)}
+										disabled={interactionsLocked}
+										aria-label={`Remove ${candidate.symbol}`}
+									>
+										<Close />
+									</button>
+								</div>
+							);
+						})}
+					</div>
+					<div className="ledger-totals">
+						<div>
+							<span>Wallet balance</span>
+							<strong>
+								{walletBalance === undefined
+									? "—"
+									: formatTicketSizeUsd(walletBalance)}
+							</strong>
+							<small>
+								<b>{stableToken}</b>
+							</small>
+						</div>
+						<div>
+							<span>Total input</span>
+							<strong>{formatTicketSizeUsd(total)}</strong>
+							<small>
+								<b>{stableToken}</b> to invest
+							</small>
+						</div>
+						<div>
+							<span>Remainder</span>
+							<strong>
+								{formatTicketSizeUsd(
+									Math.round((periodLimitUsd - total) * 100) / 100,
+								)}
+							</strong>
+							<small>
+								<b>{stableToken}</b>
+							</small>
+						</div>
+					</div>
+				</section>
+
+				<aside className="policy-rail">
+					<h2>Policy checks</h2>
+					<div
+						className={`live-execution-notice${checkoutUi.disabled ? " is-disabled" : ""}`}
+						role="status"
+					>
+						<strong>{checkoutUi.label}</strong>
+						<span>{checkoutUi.warning}</span>
+					</div>
+					{[
+						{
+							label: "Assets eligible",
+							value: selected.length
+								? `${selected.length} / ${selected.length}`
+								: "No assets selected",
+							ok: selected.length > 0,
+						},
+						{
+							label: quotesSafeToSign
+								? "Quotes fresh"
+								: quotesFresh
+									? "Quote nearly expired"
+									: "Preview expired",
+							value: quotesSafeToSign
+								? `${Math.ceil(quoteExpiry / 1000)}s`
+								: "Refresh required",
+							ok: quotesSafeToSign,
+						},
+						{
+							label: "Budget within limit",
+							value: `${formatTicketSizeUsd(total)} / ${formatTicketSizeUsd(periodLimitUsd)} ${stableToken}`,
+							ok: selected.length > 0,
+						},
+						{
+							label: "Execution provider",
+							value: "Jupiter",
+							ok: true,
+						},
+						{
+							label: "Solana · Mainnet",
+							value: "Connected",
+							ok: true,
+						},
+						{
+							label: hasExecutableTransaction
+								? perLegSolana
+									? "Independent Solana swaps"
+									: "Atomic Solana transaction"
+								: liveExecution
+									? "Live execution"
+									: "Demo execution",
+							value: hasExecutableTransaction
+								? executionWalletReady
+									? "Ready"
+									: "Activation required"
+								: liveExecution
+									? "Quotes required"
+									: "Simulated",
+							ok: hasExecutableTransaction
+								? executionWalletReady
+								: !liveExecution,
+						},
+					].map(({ label, value, ok }) => (
+						<div className="policy-row" key={label}>
+							<span
+								className={ok ? "check-circle" : "check-circle warning-circle"}
+							>
+								{ok ? <Check /> : "!"}
+							</span>
+							<b>{label}</b>
+							<em>{value}</em>
+						</div>
+					))}
+					{!liveExecution ? (
+						<div className="wallet-boundary">
+							<Shield />
+							<p>
+								<b>Demo only · no broadcast.</b>
+								<br />
+								This simulates basket confirmation and settlement without moving
+								funds.
+							</p>
 						</div>
 					) : null}
-				</div>
-				{executionConflict ? (
-					<button
-						type="button"
-						className="button button-outline"
-						onClick={onStartAnotherBasket}
-					>
-						Start another basket
-					</button>
-				) : null}
-				<div className="review-actions">
-					<button
-						type="button"
-						className="button button-outline"
-						onClick={onBack}
-					>
-						Back to cards
-					</button>
-					{!activeRecord ? (
+					<div className="proof-block">
+						<h3>
+							{feed.proof.teeVerified
+								? "0G Private Allocation Jury"
+								: "Personal feed ranking"}
+						</h3>
+						<p>
+							<span>Ranking model</span>
+							<b>{feed.proof.model}</b>
+						</p>
+						<p>
+							<span>Provider</span>
+							<b>
+								{feed.proof.teeVerified
+									? shortHash(feed.proof.provider)
+									: "Local fixture"}
+							</b>
+						</p>
+						<p>
+							<span>Input commitment</span>
+							<b>{shortHash(feed.proof.inputCommitment)}</b>
+						</p>
+						<p>
+							<span>Output commitment</span>
+							<b>{shortHash(feed.proof.outputCommitment)}</b>
+						</p>
+						<p>
+							<span>TEE verified</span>
+							<b>
+								{feed.proof.teeVerified ? "Verified" : "Not available in demo"}
+							</b>
+						</p>
+						{feed.proof.teeVerified ? (
+							<div className="proof-links">
+								<a
+									href={zeroGProviderUrl(feed.proof.provider)}
+									target="_blank"
+									rel="noreferrer"
+								>
+									View TEE provider on 0G Explorer ↗
+								</a>
+								<a
+									href="https://0g.ai/product"
+									target="_blank"
+									rel="noreferrer"
+								>
+									How 0G private inference works ↗
+								</a>
+							</div>
+						) : null}
+					</div>
+					{executionConflict ? (
 						<button
 							type="button"
-							className="button button-primary"
-							onClick={prepare}
-							disabled={loading || !selected.length}
+							className="button button-outline"
+							onClick={onStartAnotherBasket}
 						>
-							{loading ? "Refreshing…" : "Refresh quotes"}{" "}
-							{loading ? (
-								<LoaderCircle className="button-spinner" />
-							) : (
-								<RotateCcw />
-							)}
+							Start another basket
 						</button>
-					) : (
+					) : null}
+					<div className="review-actions">
 						<button
 							type="button"
-							className="button button-primary"
-							onClick={
-								activeRecord.status === "SUBMITTED"
-									? resumeReconciliation
-									: !quotesSafeToSign
-										? prepare
-										: hasExecutableTransaction
-											? confirmLive
-											: settleDemo
-							}
+							className="button button-outline"
+							onClick={activeRecord ? editPreparedBasket : onBack}
 							disabled={
 								loading ||
-								!selected.length ||
-								activeRecord.status === "SETTLED" ||
-								signingBlocked
+								Boolean(activeRecord && activeRecord.status !== "PREPARED")
 							}
 						>
-							{activeRecord.status === "SETTLED"
-								? "Settled"
-								: loading
-									? phaseLabel(phase)
-									: activeRecord.status === "SUBMITTED"
-										? "Check settlement receipt"
-										: signingBlocked
-											? "Live purchases temporarily unavailable"
-											: !quotesSafeToSign
-												? "Refresh quotes"
-												: hasExecutableTransaction
-													? `Sign & invest ${formatTicketSizeUsd(total)} ${stableToken}`
-													: "Simulate wallet confirmation"}{" "}
-							{loading ? (
-								<LoaderCircle className="button-spinner" />
-							) : activeRecord.status !== "SETTLED" &&
-								activeRecord.status !== "SUBMITTED" &&
-								!quotesSafeToSign ? (
-								<RotateCcw />
-							) : (
-								<ArrowRight />
-							)}
+							{activeRecord ? "Edit basket" : "Back to cards"}
 						</button>
-					)}
-				</div>
-			</aside>
-		</main>
+						{!activeRecord ? (
+							<button
+								type="button"
+								className="button button-primary"
+								onClick={prepare}
+								disabled={loading || !selected.length}
+							>
+								{loading ? "Refreshing…" : "Refresh quotes"}{" "}
+								{loading ? (
+									<LoaderCircle className="button-spinner" />
+								) : (
+									<RotateCcw />
+								)}
+							</button>
+						) : (
+							<button
+								type="button"
+								className="button button-primary"
+								onClick={
+									activeRecord.status === "SUBMITTED"
+										? resumeReconciliation
+										: !quotesSafeToSign
+											? prepare
+											: hasExecutableTransaction
+												? () => setConfirmationOpen(true)
+												: settleDemo
+								}
+								disabled={
+									loading ||
+									!selected.length ||
+									activeRecord.status === "SETTLED" ||
+									signingBlocked
+								}
+							>
+								{activeRecord.status === "SETTLED"
+									? "Settled"
+									: loading
+										? phaseLabel(phase)
+										: activeRecord.status === "SUBMITTED"
+											? "Check settlement receipt"
+											: signingBlocked
+												? "Live purchases temporarily unavailable"
+												: !quotesSafeToSign
+													? "Refresh quotes"
+													: hasExecutableTransaction
+														? `Sign & invest ${formatTicketSizeUsd(total)} ${stableToken}`
+														: "Simulate wallet confirmation"}{" "}
+								{loading ? (
+									<LoaderCircle className="button-spinner" />
+								) : activeRecord.status !== "SETTLED" &&
+									activeRecord.status !== "SUBMITTED" &&
+									!quotesSafeToSign ? (
+									<RotateCcw />
+								) : (
+									<ArrowRight />
+								)}
+							</button>
+						)}
+					</div>
+				</aside>
+			</main>
+		</>
+	);
+}
+
+function formatSolFee(transactionCount: number) {
+	return (transactionCount * 0.000005).toFixed(6);
+}
+
+function executionQuotesSafeToSubmit(record: ExecutionRecord) {
+	const expiresAt = Math.min(
+		...record.plan.quotes.map((quote) => new Date(quote.expiresAt).getTime()),
+	);
+	return (
+		Number.isFinite(expiresAt) && expiresAt - Date.now() > MIN_SIGNING_WINDOW_MS
 	);
 }
 

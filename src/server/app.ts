@@ -69,19 +69,20 @@ import type {
 import { ExecutionProviderError } from "./adapters/types.js";
 import type { ExecutionActor } from "./auth.js";
 import { PrivyWalletAuth } from "./auth.js";
-import type { AppConfig } from "./config.js";
 import { broadcastPreparedExecution } from "./broadcast-execution.js";
+import type { AppConfig } from "./config.js";
 import {
 	assertCanonicalExecutionOwner,
 	assertPlanQuotesFresh,
 	LivePurchaseSafetyError,
 } from "./live-purchase-safety.js";
-import { reconcileExecution } from "./reconcile-execution.js";
 import {
 	loadPortfolioMetadata,
 	persistPortfolioMetadata,
 	portfolioTokenFallbackName,
 } from "./portfolio-metadata.js";
+import { publicExecution } from "./public-execution.js";
+import { reconcileExecution } from "./reconcile-execution.js";
 import { sessionEpochId } from "./session-epoch.js";
 import type { StateStore } from "./store.js";
 
@@ -527,6 +528,13 @@ export function createApp(deps: AppDependencies) {
 					const usdPrice = token.tokenPrices?.find(
 						(price) => price.currency.toLowerCase() === "usd",
 					);
+					const iconUrls = [
+						persisted?.iconUrl,
+						token.tokenMetadata?.logo,
+					].filter(
+						(icon, index, icons): icon is string =>
+							Boolean(icon) && icons.indexOf(icon) === index,
+					);
 					return {
 						assetId:
 							known?.assetId ??
@@ -553,8 +561,8 @@ export function createApp(deps: AppDependencies) {
 							token.tokenMetadata?.decimals ??
 							0,
 						balanceBaseUnits,
-						iconUrl:
-							persisted?.iconUrl ?? token.tokenMetadata?.logo ?? undefined,
+						iconUrl: iconUrls[0],
+						iconUrls,
 						explorerUrl: `https://solscan.io/token/${mint}`,
 						priceUsd: usdPrice
 							? Number(usdPrice.value)
@@ -1234,6 +1242,7 @@ export function createApp(deps: AppDependencies) {
 			);
 			timing.mark("execution");
 			const plan = {
+				executionPlanVersion: 2,
 				executionId: session.executionId ?? randomUUID(),
 				sessionId: session.id,
 				epochId: session.epochId,
@@ -1271,7 +1280,7 @@ export function createApp(deps: AppDependencies) {
 			timing.mark("store");
 			timing.apply(response);
 			response.json({
-				...execution,
+				...publicExecution(execution),
 				kind: "SOLANA_TRANSACTION",
 				solanaTransaction: preparation.solanaTransaction,
 				solanaTransactions: preparation.solanaTransactions,
@@ -1305,11 +1314,13 @@ export function createApp(deps: AppDependencies) {
 				status: "success" as const,
 			}));
 			response.json(
-				await deps.store.updateExecution(
-					execution.plan.executionId,
-					"SETTLED",
-					transactionHashes,
-					settledOutputs,
+				publicExecution(
+					await deps.store.updateExecution(
+						execution.plan.executionId,
+						"SETTLED",
+						transactionHashes,
+						settledOutputs,
+					),
 				),
 			);
 		},
@@ -1354,10 +1365,17 @@ export function createApp(deps: AppDependencies) {
 				const provider = executionProvider(deps, execution.plan.provider);
 				if (execution.status !== "PREPARED") {
 					if (execution.status === "SUBMITTED") {
-						response.json(execution);
+						response.json(publicExecution(execution));
 						return;
 					}
 					response.status(409).json({ error: "EXECUTION_NOT_PREPARED" });
+					return;
+				}
+				if (execution.plan.executionPlanVersion !== 2) {
+					response.status(409).json({
+						error: "EXECUTION_PLAN_OUTDATED",
+						message: "Refresh quotes before signing this basket.",
+					});
 					return;
 				}
 				assertPlanQuotesFresh(execution.plan);
@@ -1398,7 +1416,7 @@ export function createApp(deps: AppDependencies) {
 				const current = broadcast.execution;
 				const hasUnknownBroadcast = broadcast.hasUnknownBroadcast;
 				response.status(hasUnknownBroadcast ? 202 : 200).json({
-					...current,
+					...publicExecution(current),
 					...(hasUnknownBroadcast
 						? { reconciliation: ["broadcast-unknown"] }
 						: {}),
@@ -1419,7 +1437,10 @@ export function createApp(deps: AppDependencies) {
 			const execution = await deps.store.getExecution(
 				String(request.params.executionId),
 			);
-			if (execution?.status !== "SUBMITTED") {
+			if (
+				!execution ||
+				!["SUBMITTED", "PARTIAL", "FAILED"].includes(execution.status)
+			) {
 				response.status(409).json({ error: "EXECUTION_NOT_SUBMITTED" });
 				return;
 			}
@@ -1445,7 +1466,7 @@ export function createApp(deps: AppDependencies) {
 					store: deps.store,
 				});
 				response.status(pending ? 202 : 200).json({
-					...updated,
+					...publicExecution(updated),
 					...(pending ? { reconciliation: ["pending"] } : {}),
 				});
 				return;
@@ -1474,7 +1495,7 @@ export function createApp(deps: AppDependencies) {
 				return;
 			}
 			await assertCanonicalOwner(response, session);
-			response.json(execution);
+			response.json(publicExecution(execution));
 		},
 	);
 

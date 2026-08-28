@@ -33,6 +33,7 @@ import {
 	type ProviderSnapshotCache,
 	type SolanaPreparedTransaction,
 } from "./types.js";
+import { minimumTransactionPacking } from "../transaction-packing.js";
 
 type Fetcher = typeof fetch;
 
@@ -57,6 +58,30 @@ type JupiterBuild = {
 	cleanupInstruction?: JupiterInstruction | null;
 	otherInstructions?: JupiterInstruction[];
 	addressesByLookupTableAddress?: Record<string, string[]>;
+};
+
+type PreparedJupiterRoute = {
+	candidate: Candidate;
+	amount: string;
+	build: JupiterBuild;
+	quote: Quote;
+};
+
+type RecentBlockhash = {
+	blockhash: string;
+	lastValidBlockHeight: number;
+};
+
+type CompiledJupiterGroup = {
+	prepared: PreparedJupiterRoute[];
+	blockhash: RecentBlockhash;
+	simulationTransaction: VersionedTransaction;
+	serializedSize: number;
+	usesExplicitComputeBudget: boolean;
+	compile: (
+		unitLimit?: number,
+		includeProviderCompute?: boolean,
+	) => ReturnType<TransactionMessage["compileToV0Message"]>;
 };
 
 type JupiterToken = {
@@ -238,7 +263,8 @@ export class JupiterProvider implements ExecutionProvider, CandidateProvider {
 
 	async getCandidatesForDisplay(assetIds: string[]): Promise<Candidate[]> {
 		const entries = assetIds.flatMap((assetId) => {
-			const asset = solanaAssetById(assetId) ?? this.discoveredAssets.get(assetId);
+			const asset =
+				solanaAssetById(assetId) ?? this.discoveredAssets.get(assetId);
 			const mint = asset?.address ?? dynamicMintFromAssetId(assetId);
 			return mint ? [{ assetId, mint }] : [];
 		});
@@ -307,12 +333,7 @@ export class JupiterProvider implements ExecutionProvider, CandidateProvider {
 		// ponytail: one fresh route retry; add DEX exclusions only if failures persist.
 		let retriedRouteFailure = false;
 		const smallestWorkingBuild = new Map<string, JupiterBuild>();
-		let fallbackPrepared: Array<{
-			candidate: Candidate;
-			amount: string;
-			build: JupiterBuild;
-			quote: Quote;
-		}> = [];
+		let fallbackPrepared: PreparedJupiterRoute[] = [];
 		for (const maxAccounts of accountProfiles) {
 			// ponytail: independent Jupiter legs are network-bound, so build them together.
 			const preparedResults = await Promise.allSettled(
@@ -377,16 +398,20 @@ export class JupiterProvider implements ExecutionProvider, CandidateProvider {
 				return { quotes: [], unavailableAssetIds };
 			}
 			const rejected = preparedResults.find(
-				(result): result is PromiseRejectedResult => result.status === "rejected",
+				(result): result is PromiseRejectedResult =>
+					result.status === "rejected",
 			);
 			if (rejected) throw rejected.reason;
 			const prepared = preparedResults.map(
-				(result) => (result as PromiseFulfilledResult<{
-					candidate: Candidate;
-					amount: string;
-					build: JupiterBuild;
-					quote: Quote;
-				}>).value,
+				(result) =>
+					(
+						result as PromiseFulfilledResult<{
+							candidate: Candidate;
+							amount: string;
+							build: JupiterBuild;
+							quote: Quote;
+						}>
+					).value,
 			);
 			fallbackPrepared = prepared;
 			try {
@@ -425,10 +450,7 @@ export class JupiterProvider implements ExecutionProvider, CandidateProvider {
 				)
 			);
 		}
-		// ponytail: one transaction per leg is the reliable fallback; pack later only if measured UX demands it.
-		const solanaTransactions = await Promise.all(
-			fallbackPrepared.map((item) => this.compose(wallet, [item])),
-		);
+		const solanaTransactions = await this.packBasket(wallet, fallbackPrepared);
 		const validatedAt = new Date();
 		return {
 			quotes: fallbackPrepared.map((item) => ({
@@ -466,8 +488,8 @@ export class JupiterProvider implements ExecutionProvider, CandidateProvider {
 		const submittedSignature = await this.connection.sendRawTransaction(
 			transaction.serialize(),
 			{
-			skipPreflight: false,
-			maxRetries: 3,
+				skipPreflight: false,
+				maxRetries: 3,
 			},
 		);
 		if (submittedSignature !== signature) {
@@ -483,7 +505,8 @@ export class JupiterProvider implements ExecutionProvider, CandidateProvider {
 		prepared: SolanaPreparedTransaction,
 		signedTransactionBase64: string,
 	) {
-		return inspectSignedTransaction(prepared, signedTransactionBase64).signature;
+		return inspectSignedTransaction(prepared, signedTransactionBase64)
+			.signature;
 	}
 
 	async transactionStatus(signature: string, lastValidBlockHeight?: number) {
@@ -557,10 +580,7 @@ export class JupiterProvider implements ExecutionProvider, CandidateProvider {
 				amountOutBaseUnits: delta > 0n ? delta.toString() : "0",
 				transactionHash: signature,
 				blockNumber: transaction.slot.toString(),
-				status:
-					delta >= BigInt(item.minimumAmountOut)
-						? ("success" as const)
-						: ("failed" as const),
+				status: delta > 0n ? ("success" as const) : ("failed" as const),
 			};
 		});
 	}
@@ -611,7 +631,8 @@ export class JupiterProvider implements ExecutionProvider, CandidateProvider {
 	private async resolveCandidateMetadata(
 		assetId: string,
 	): Promise<Candidate | undefined> {
-		const asset = solanaAssetById(assetId) ?? this.discoveredAssets.get(assetId);
+		const asset =
+			solanaAssetById(assetId) ?? this.discoveredAssets.get(assetId);
 		const mint = asset?.address ?? dynamicMintFromAssetId(assetId);
 		if (!mint) return undefined;
 		const metadata =
@@ -706,13 +727,87 @@ export class JupiterProvider implements ExecutionProvider, CandidateProvider {
 
 	private async compose(
 		wallet: string,
-		prepared: Array<{
-			candidate: Candidate;
-			amount: string;
-			build: JupiterBuild;
-			quote: Quote;
-		}>,
+		prepared: PreparedJupiterRoute[],
 	): Promise<SolanaPreparedTransaction> {
+		const blockhash = await this.connection.getLatestBlockhash("confirmed");
+		return this.simulateCompiledGroup(
+			this.compileGroup(wallet, prepared, blockhash),
+		);
+	}
+
+	private async packBasket(
+		wallet: string,
+		prepared: PreparedJupiterRoute[],
+	): Promise<SolanaPreparedTransaction[]> {
+		const blockhash = await this.connection.getLatestBlockhash("confirmed");
+		const compiledByMask = new Map<number, CompiledJupiterGroup>();
+		for (let mask = 1; mask < 1 << prepared.length; mask += 1) {
+			const group = prepared.filter((_, index) => (mask & (1 << index)) !== 0);
+			try {
+				compiledByMask.set(mask, this.compileGroup(wallet, group, blockhash));
+			} catch (error) {
+				if (
+					!(error instanceof ExecutionProviderError) ||
+					error.code !== "BASKET_TOO_LARGE"
+				) {
+					throw error;
+				}
+			}
+		}
+
+		for (let attempt = 0; attempt < prepared.length * 2 + 1; attempt += 1) {
+			const masks = minimumTransactionPacking(
+				prepared.length,
+				[...compiledByMask].map(([mask, compiled]) => ({
+					mask,
+					serializedSize: compiled.serializedSize,
+				})),
+			);
+			if (!masks) {
+				throw providerError(
+					"BASKET_TOO_LARGE",
+					"The Solana basket could not be packed into valid transactions.",
+				);
+			}
+			const results = await Promise.allSettled(
+				masks.map((mask) => {
+					const compiled = compiledByMask.get(mask);
+					if (!compiled) throw new Error("PACKED_TRANSACTION_REQUIRED");
+					return this.simulateCompiledGroup(compiled);
+				}),
+			);
+			const rejected = results.flatMap((result, index) =>
+				result.status === "rejected"
+					? [{ mask: masks[index] ?? 0, error: result.reason }]
+					: [],
+			);
+			if (!rejected.length) {
+				return results.map(
+					(result) =>
+						(result as PromiseFulfilledResult<SolanaPreparedTransaction>).value,
+				);
+			}
+			for (const failure of rejected) {
+				if (
+					failure.error instanceof ExecutionProviderError &&
+					failure.error.code === "INSUFFICIENT_FUNDS"
+				) {
+					throw failure.error;
+				}
+				compiledByMask.delete(failure.mask);
+			}
+		}
+		throw providerError(
+			"SIMULATION_FAILED",
+			"The Solana basket could not be packed into simulated transactions.",
+		);
+	}
+
+	private compileGroup(
+		wallet: string,
+		prepared: PreparedJupiterRoute[],
+		blockhash: RecentBlockhash,
+	): CompiledJupiterGroup {
 		const feePayer = new PublicKey(wallet);
 		const instructionKeys = new Set<string>();
 		const computeInstructions: TransactionInstruction[] = [];
@@ -785,7 +880,6 @@ export class JupiterProvider implements ExecutionProvider, CandidateProvider {
 			}
 		}
 
-		const blockhash = await this.connection.getLatestBlockhash("confirmed");
 		const uniqueComputeInstructions = new Map<number, TransactionInstruction>();
 		for (const instruction of computeInstructions) {
 			if (
@@ -851,8 +945,21 @@ export class JupiterProvider implements ExecutionProvider, CandidateProvider {
 				`The atomic Solana basket is ${simulationSize} bytes and exceeds the 1232-byte transaction limit.`,
 			);
 		}
-		const simulation = await this.connection.simulateTransaction(
+		return {
+			prepared,
+			blockhash,
 			simulationTransaction,
+			serializedSize: simulationSize,
+			usesExplicitComputeBudget,
+			compile,
+		};
+	}
+
+	private async simulateCompiledGroup(
+		compiled: CompiledJupiterGroup,
+	): Promise<SolanaPreparedTransaction> {
+		const simulation = await this.connection.simulateTransaction(
+			compiled.simulationTransaction,
 			{ sigVerify: false, replaceRecentBlockhash: false },
 		);
 		if (simulation.value.err) {
@@ -876,11 +983,11 @@ export class JupiterProvider implements ExecutionProvider, CandidateProvider {
 			Math.max(50_000, Math.ceil(consumed * 1.2)),
 		);
 		const transaction = new VersionedTransaction(
-			usesExplicitComputeBudget
-				? compile(unitLimit)
-				: compile(undefined, false),
+			compiled.usesExplicitComputeBudget
+				? compiled.compile(unitLimit)
+				: compiled.compile(undefined, false),
 		);
-		const serialized = serialize(transaction);
+		const serialized = serializeJupiterTransaction(transaction);
 		if (serialized.byteLength > 1_232) {
 			throw providerError(
 				"BASKET_TOO_LARGE",
@@ -894,9 +1001,9 @@ export class JupiterProvider implements ExecutionProvider, CandidateProvider {
 			messageCommitment: `sha256:${createHash("sha256")
 				.update(messageBytes)
 				.digest("hex")}`,
-			recentBlockhash: blockhash.blockhash,
-			lastValidBlockHeight: blockhash.lastValidBlockHeight,
-			expectedBalanceChanges: prepared.map((item) => ({
+			recentBlockhash: compiled.blockhash.blockhash,
+			lastValidBlockHeight: compiled.blockhash.lastValidBlockHeight,
+			expectedBalanceChanges: compiled.prepared.map((item) => ({
 				assetId: item.candidate.assetId,
 				mint: item.candidate.contract,
 				minimumAmountOut: item.quote.minimumAmountOut,
@@ -1166,9 +1273,7 @@ function candidateFromAsset(
 			Math.min(10_000, Math.round((metadata.organicScore ?? 50) * 100)),
 		),
 		reason: `${asset.name} passed Jupiter token and market checks. A fresh USDC route is verified at review.`,
-		evidenceIds: [
-			`jupiter:token:${asset.address}`,
-		],
+		evidenceIds: [`jupiter:token:${asset.address}`],
 	};
 }
 
@@ -1368,6 +1473,17 @@ function toInstruction(instruction: JupiterInstruction) {
 		})),
 		data: Buffer.from(instruction.data, "base64"),
 	});
+}
+
+function serializeJupiterTransaction(transaction: VersionedTransaction) {
+	try {
+		return transaction.serialize();
+	} catch {
+		throw providerError(
+			"BASKET_TOO_LARGE",
+			"The atomic Solana basket exceeds the transaction size limit.",
+		);
+	}
 }
 
 function positiveInteger(value: unknown): value is string {

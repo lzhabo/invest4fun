@@ -177,7 +177,11 @@ export function AppShell({
 						title="Sign in with Privy"
 					>
 						{navigationEnabled ? <Wallet size={17} strokeWidth={1.7} /> : null}
-						{navigationEnabled ? "Connect wallet" : "Sign in"}
+						{navigationEnabled
+							? "Connect wallet"
+							: walletReady
+								? "Sign in"
+								: "Loading…"}
 					</button>
 				)}
 			</header>

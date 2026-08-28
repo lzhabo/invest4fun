@@ -10,6 +10,8 @@ import { api } from "../api";
 
 const CURATED_ICON_URLS: Record<string, string> = {
 	"sol:mainnet:SOL": "/assets/chains/solana.svg",
+	"sol:mainnet:cbbtcf3aa214zXHbiAZQwf4122FBYbraNdFqgw4iMij":
+		"/assets/tokens/cbbtc.svg",
 };
 const AssetIconsContext = createContext<Record<string, string>>({});
 
@@ -47,17 +49,20 @@ export function AssetIconProvider({ children }: { children: ReactNode }) {
 export function assetLogoSources({
 	assetId,
 	iconUrl,
+	iconUrls = [],
 	registeredIconUrl,
 }: {
 	assetId?: string;
 	symbol: string;
 	iconUrl?: string;
+	iconUrls?: string[];
 	registeredIconUrl?: string;
 }): string[] {
 	return [
 		assetId ? CURATED_ICON_URLS[assetId] : undefined,
-		iconUrl,
-		registeredIconUrl,
+		...expandIconSource(iconUrl),
+		...iconUrls.flatMap((source) => expandIconSource(source)),
+		...expandIconSource(registeredIconUrl),
 	].filter(
 		(source, index, sources): source is string =>
 			Boolean(source) && sources.indexOf(source) === index,
@@ -86,17 +91,21 @@ function AssetLogo({
 	const [sourceIndex, setSourceIndex] = useState(0);
 
 	const imageUrl = sources[sourceIndex];
+	useEffect(() => {
+		if (!imageUrl) return;
+		const timer = window.setTimeout(
+			() => setSourceIndex((index) => index + 1),
+			3_000,
+		);
+		return () => window.clearTimeout(timer);
+	}, [imageUrl]);
 	if (!imageUrl) {
 		const fallback = symbol.match(/[a-z0-9]/i)?.[0]?.toUpperCase() ?? "•";
 		const style = {
 			backgroundColor: `hsl(${fallbackHue(assetId)} 55% 88%)`,
 		} as CSSProperties;
 		return decorative ? (
-			<span
-				aria-hidden="true"
-				data-asset-fallback={assetId}
-				style={style}
-			>
+			<span aria-hidden="true" data-asset-fallback={assetId} style={style}>
 				{fallback}
 			</span>
 		) : (
@@ -120,16 +129,31 @@ function AssetLogo({
 	);
 }
 
+function expandIconSource(source?: string) {
+	if (!source) return [];
+	const ipfsPath = source.startsWith("ipfs://")
+		? source.slice("ipfs://".length)
+		: source.match(/^https:\/\/ipfs\.io\/ipfs\/(.+)$/)?.[1];
+	if (!ipfsPath) return [source];
+	return [
+		`https://ipfs.io/ipfs/${ipfsPath}`,
+		`https://cloudflare-ipfs.com/ipfs/${ipfsPath}`,
+		`https://gateway.pinata.cloud/ipfs/${ipfsPath}`,
+	];
+}
+
 export function AssetMark({
 	assetId,
 	symbol,
 	iconUrl,
+	iconUrls,
 	size = "md",
 	decorative = false,
 }: {
 	assetId?: string;
 	symbol: string;
 	iconUrl?: string;
+	iconUrls?: string[];
 	size?: "sm" | "md" | "lg";
 	decorative?: boolean;
 }) {
@@ -139,6 +163,7 @@ export function AssetMark({
 		assetId,
 		symbol,
 		iconUrl,
+		iconUrls,
 		registeredIconUrl,
 	});
 

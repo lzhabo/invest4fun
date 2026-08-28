@@ -13,7 +13,6 @@ import {
 	writeAccountPreferences,
 } from "../preferences-storage";
 import { findEmbeddedSolanaWallet } from "../solana-wallet-selection";
-import { ChainMark } from "./ChainMark";
 import { ArrowRight, Check, Shield } from "./Icons";
 
 type Step =
@@ -155,7 +154,6 @@ const ASSET_OPTIONS: Array<{
 ];
 
 export function Onboarding({
-	config,
 	onComplete,
 	privyReady,
 	onChainPreview,
@@ -275,31 +273,6 @@ export function Onboarding({
 					personalizes your feed; your preset limit keeps every session in
 					bounds, and nothing moves until you approve it.
 				</p>
-				<div className="onboarding-connect-control">
-					<div className="onboarding-chain-selector">
-						<ChainMark chain="SOLANA" />
-						<span>Solana</span>
-					</div>
-					{authenticated && preferredSolanaWallet ? (
-						<div className="onboarding-wallet-ready" role="status">
-							<Check />
-							<span>
-								Wallet ready · {shortAddress(preferredSolanaWallet.address)}
-							</span>
-						</div>
-					) : (
-						<button
-							type="button"
-							className="button button-primary onboarding-connect-button"
-							onClick={connect}
-							disabled={busy || !privyReady}
-							aria-label="Connect Solana wallet with Privy"
-							title="Connect Solana wallet with Privy"
-						>
-							{busy ? "Waiting…" : "Connect Solana wallet"}
-						</button>
-					)}
-				</div>
 				<div className="onboarding-points">
 					<p>
 						<span>1</span>
@@ -340,13 +313,9 @@ export function Onboarding({
 				) : (
 					<>
 						<Shield />
-						<span className="onboarding-kicker">Plan saved</span>
-						<h2>Activate your Investmade Wallet</h2>
-						<p>
-							{config.demoMode
-								? "Real Privy wallet · simulated basket"
-								: "One Solana wallet · one atomic basket · Jupiter"}
-						</p>
+						<span className="onboarding-kicker">Plan ready</span>
+						<h2>Continue to your personalized feed</h2>
+						<p>Save your plan and finish setting up your account.</p>
 						{completedPreferences ? (
 							<PlanSummary preferences={completedPreferences} compact />
 						) : null}
@@ -355,14 +324,9 @@ export function Onboarding({
 								{error}
 							</div>
 						) : null}
-						<div className="onboarding-chain-selector">
-							<ChainMark chain="SOLANA" />
-							<span>Solana</span>
-						</div>
 						{authenticated && preferredSolanaWallet ? (
 							<div className="onboarding-wallet-ready" role="status">
-								<Check />
-								<span>Solana wallet ready</span>
+								<span>Preparing your feed…</span>
 							</div>
 						) : (
 							<button
@@ -371,12 +335,7 @@ export function Onboarding({
 								onClick={connect}
 								disabled={busy || !privyReady}
 							>
-								{busy
-									? "Waiting…"
-									: authenticated
-										? "Connect Solana wallet"
-										: `Continue with ${"Solana"}`}{" "}
-								<ArrowRight />
+								{busy ? "Waiting…" : "Continue"} <ArrowRight />
 							</button>
 						)}
 						<button
@@ -387,9 +346,8 @@ export function Onboarding({
 							Change my answers
 						</button>
 						<small>
-							{config.demoMode
-								? "Local demo: Privy is real; trading and settlement are simulated."
-								: "Non-custodial. No trading mandate. No autonomous execution."}
+							You stay in control. Nothing moves until you review and approve a
+							basket.
 						</small>
 					</>
 				)}
@@ -911,12 +869,6 @@ function customPeriodLimit(value: string): number | undefined {
 	const parsed = Number(value);
 	const rounded = Math.round(parsed * 100) / 100;
 	return isPeriodLimitUsd(rounded) ? rounded : undefined;
-}
-
-function shortAddress(address: string) {
-	return address.length > 12
-		? `${address.slice(0, 5)}…${address.slice(-5)}`
-		: address;
 }
 
 function cadenceLabel(cadence: OnboardingPreferences["cadence"]) {

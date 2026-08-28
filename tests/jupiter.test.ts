@@ -31,10 +31,10 @@ function providerFor(
 						name: asset?.name ?? "Unknown",
 						symbol: asset?.symbol ?? "UNKNOWN",
 						decimals: asset?.decimals ?? 6,
-					isVerified: true,
-					organicScore: 90,
-					usdPrice: 100,
-					liquidity: 1_000_000,
+						isVerified: true,
+						organicScore: 90,
+						usdPrice: 100,
+						liquidity: 1_000_000,
 					};
 				}),
 			);
@@ -597,6 +597,40 @@ describe("Jupiter atomic Solana execution", () => {
 		).toEqual(assetIds);
 	});
 
+	it("packs compatible fallback legs into the minimum number of transactions", async () => {
+		const wallet = Keypair.generate().publicKey.toBase58();
+		const { provider } = providerFor(wallet, undefined, 350);
+		const assetIds = Object.values(SOLANA_ASSET_REGISTRY)
+			.slice(0, 3)
+			.map((asset) => asset.assetId);
+		const candidates = await candidatesFor(provider, wallet, assetIds);
+
+		const prepared = await provider.prepareBasket(
+			wallet,
+			{
+				chain: "SOLANA",
+				cluster: "mainnet-beta",
+				inputToken: SOLANA_USDC_MINT,
+				sessionId: "packed-fallback",
+				periodLimitUsd: 10,
+				selections: assetIds.map((assetId) => ({
+					assetId,
+					amountInBaseUnits: "1000000",
+				})),
+				slippageBps: 50,
+			},
+			candidates,
+		);
+
+		expect(prepared.solanaTransaction).toBeUndefined();
+		expect(prepared.solanaTransactions).toHaveLength(2);
+		expect(
+			prepared.solanaTransactions?.flatMap((transaction) =>
+				transaction.expectedBalanceChanges.map((change) => change.assetId),
+			),
+		).toEqual(assetIds);
+	});
+
 	it("skips capped routes for baskets with three or more assets", async () => {
 		const wallet = Keypair.generate().publicKey.toBase58();
 		const { provider, fetcher } = providerFor(wallet, undefined, 600);
@@ -749,9 +783,7 @@ describe("Jupiter atomic Solana execution", () => {
 		Object.assign(provider as object, {
 			connection: {
 				getSignatureStatuses: vi.fn(async () => ({
-					value: [
-						{ err: null, confirmationStatus: "finalized", slot: 123 },
-					],
+					value: [{ err: null, confirmationStatus: "finalized", slot: 123 }],
 				})),
 			},
 		});
@@ -793,6 +825,54 @@ describe("Jupiter atomic Solana execution", () => {
 			expect.objectContaining({
 				assetId: "sol:mainnet:SOL",
 				amountOutBaseUnits: "1354411",
+				status: "success",
+			}),
+		]);
+	});
+
+	it("treats a positive finalized token delta as purchased", async () => {
+		const wallet = Keypair.generate().publicKey.toBase58();
+		const mint = Keypair.generate().publicKey.toBase58();
+		const { provider } = providerFor(wallet);
+		Object.assign(provider as object, {
+			connection: {
+				getTransaction: vi.fn(async () => ({
+					slot: 43,
+					meta: {
+						err: null,
+						fee: 5_000,
+						preBalances: [1_000_000],
+						postBalances: [995_000],
+						preTokenBalances: [
+							{
+								owner: wallet,
+								mint,
+								uiTokenAmount: { amount: "100" },
+							},
+						],
+						postTokenBalances: [
+							{
+								owner: wallet,
+								mint,
+								uiTokenAmount: { amount: "125" },
+							},
+						],
+					},
+				})),
+			},
+		});
+
+		const outputs = await provider.reconcileOutputs("signature", wallet, [
+			{
+				assetId: `sol:mainnet:${mint}`,
+				mint,
+				minimumAmountOut: "100",
+			},
+		]);
+
+		expect(outputs).toEqual([
+			expect.objectContaining({
+				amountOutBaseUnits: "25",
 				status: "success",
 			}),
 		]);

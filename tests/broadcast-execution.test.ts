@@ -10,7 +10,11 @@ const prepared = (assetId: string, byte: string) => ({
 	recentBlockhash: "11111111111111111111111111111111",
 	lastValidBlockHeight: 500,
 	expectedBalanceChanges: [
-		{ assetId, mint: "So11111111111111111111111111111111111111112", minimumAmountOut: "1" },
+		{
+			assetId,
+			mint: "So11111111111111111111111111111111111111112",
+			minimumAmountOut: "1",
+		},
 	],
 });
 
@@ -56,11 +60,11 @@ describe("sequential execution broadcaster", () => {
 		expect(events).toEqual([
 			"inspect:signed-a",
 			"CLAIM_BROADCAST:0",
-			"send:signed-a",
-			"BROADCAST_UNKNOWN:0",
 			"inspect:signed-b",
 			"CLAIM_BROADCAST:1",
+			"send:signed-a",
 			"send:signed-b",
+			"BROADCAST_UNKNOWN:0",
 			"BROADCAST_ACCEPTED:1",
 		]);
 		expect(result.hasUnknownBroadcast).toBe(true);

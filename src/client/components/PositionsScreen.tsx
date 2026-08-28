@@ -28,6 +28,7 @@ export function PositionsScreen({
 }) {
 	const [balances, setBalances] = useState<Record<string, string>>({});
 	const [indexedPortfolio, setIndexedPortfolio] = useState<Candidate[]>([]);
+	const [iconSources, setIconSources] = useState<Record<string, string[]>>({});
 	const [portfolioLoading, setPortfolioLoading] = useState(
 		!demoMode && Boolean(wallet),
 	);
@@ -40,6 +41,7 @@ export function PositionsScreen({
 		setError("");
 		setIndexedPortfolio([]);
 		setBalances({});
+		setIconSources({});
 		api
 			.solanaPortfolio(wallet)
 			.then((portfolio) => {
@@ -92,6 +94,14 @@ export function PositionsScreen({
 						portfolio.tokens.map((token) => [
 							token.assetId,
 							token.balanceBaseUnits,
+						]),
+					),
+				);
+				setIconSources(
+					Object.fromEntries(
+						portfolio.tokens.map((token) => [
+							token.assetId,
+							token.iconUrls ?? (token.iconUrl ? [token.iconUrl] : []),
 						]),
 					),
 				);
@@ -194,6 +204,7 @@ export function PositionsScreen({
 									assetId={candidate.assetId}
 									symbol={candidate.symbol}
 									iconUrl={candidate.iconUrl}
+									iconUrls={iconSources[candidate.assetId]}
 									size="sm"
 									decorative
 								/>

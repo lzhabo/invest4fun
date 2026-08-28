@@ -1,8 +1,5 @@
 import { z } from "zod";
-import {
-	DEFAULT_SLOT_BUDGET,
-	POLICY_VERSION,
-} from "./constants.js";
+import { DEFAULT_SLOT_BUDGET, POLICY_VERSION } from "./constants.js";
 import {
 	SOLANA_CLUSTER,
 	SOLANA_USDC_DECIMALS,
@@ -108,13 +105,7 @@ export const candidateSchema = z.object({
 	providerVolumeRank: z.number().int().positive().optional(),
 	providerVolumeRankTotal: z.number().int().positive().optional(),
 	marketDataSource: z
-		.enum([
-			"coingecko",
-			"geckoterminal",
-			"jupiter",
-			"alchemy",
-			"demo",
-		])
+		.enum(["coingecko", "geckoterminal", "jupiter", "alchemy", "demo"])
 		.optional(),
 	marketCapRank: z.number().int().positive().optional(),
 	marketCapRankSource: z.literal("coingecko").optional(),
@@ -160,13 +151,7 @@ export const rankingCandidateSchema = z.object({
 	riskFlags: z.array(z.string().min(1)).default([]),
 	classificationEvidence: z.array(z.string().min(1)).default([]),
 	marketDataSource: z
-		.enum([
-			"coingecko",
-			"geckoterminal",
-			"jupiter",
-			"alchemy",
-			"demo",
-		])
+		.enum(["coingecko", "geckoterminal", "jupiter", "alchemy", "demo"])
 		.optional(),
 });
 
@@ -313,15 +298,18 @@ const solanaPreparedTransactionSchema = z.object({
 	recentBlockhash: z.string().min(1),
 	lastValidBlockHeight: z.number().int().positive(),
 	expectedBalanceChanges: z
-		.array(z.object({
-			assetId: z.string().min(1),
-			mint: solanaAddressSchema,
-			minimumAmountOut: baseUnitsSchema,
-		}))
+		.array(
+			z.object({
+				assetId: z.string().min(1),
+				mint: solanaAddressSchema,
+				minimumAmountOut: baseUnitsSchema,
+			}),
+		)
 		.min(1),
 });
 
 const executionPlanBaseSchema = z.object({
+	executionPlanVersion: z.number().int().min(1).default(1),
 	executionId: z.string().min(1),
 	sessionId: z.string().min(1),
 	epochId: z.string().min(1),
@@ -360,10 +348,7 @@ export const executionPlanSchema = executionPlanBaseSchema
 	})
 	.transform((plan) => ({
 		...plan,
-		provider:
-			plan.provider ??
-			plan.quotes[0]?.provider ??
-			"JUPITER",
+		provider: plan.provider ?? plan.quotes[0]?.provider ?? "JUPITER",
 	}));
 
 export type ExecutionProviderId = z.infer<typeof executionProviderIdSchema>;

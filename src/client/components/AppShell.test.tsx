@@ -1,12 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { PrimaryNav } from "./AppShell";
+import { AppShell, PrimaryNav } from "./AppShell";
 
 describe("PrimaryNav", () => {
 	it("marks only the rendered Portfolio view as current", () => {
 		const html = renderToStaticMarkup(<PrimaryNav active="positions" />);
-		const currentLinks = (html.match(/<a[\s\S]*?<\/a>/g) ?? []).filter(
-			(link) => link.includes('aria-current="page"'),
+		const currentLinks = (html.match(/<a[\s\S]*?<\/a>/g) ?? []).filter((link) =>
+			link.includes('aria-current="page"'),
 		);
 
 		expect(currentLinks).toHaveLength(1);
@@ -17,5 +17,40 @@ describe("PrimaryNav", () => {
 		expect(html).toContain('href="/feed"');
 		expect(html).not.toContain('href="/ideas"');
 		expect(html).toContain('href="/account"');
+	});
+});
+
+describe("signed-out AppShell", () => {
+	const props = {
+		active: "week" as const,
+		onNavigate: () => {},
+		onWallet: () => {},
+		navigationEnabled: false,
+		activeChain: "SOLANA" as const,
+		theme: "light" as const,
+		solanaWallets: [],
+		onSolanaWalletChange: () => {},
+	};
+
+	it("shows loading until Privy is ready", () => {
+		const html = renderToStaticMarkup(
+			<AppShell {...props} walletReady={false}>
+				<div />
+			</AppShell>,
+		);
+
+		expect(html).toContain("Loading…");
+		expect(html).toContain("disabled");
+	});
+
+	it("uses the neutral Sign in label when ready", () => {
+		const html = renderToStaticMarkup(
+			<AppShell {...props} walletReady>
+				<div />
+			</AppShell>,
+		);
+
+		expect(html).toContain(">Sign in</button>");
+		expect(html).not.toContain("Connect wallet");
 	});
 });

@@ -61,6 +61,7 @@ describe("Solana portfolio API", () => {
 				balanceBaseUnits: "900047",
 				priceUsd: 1,
 				explorerUrl: `https://solscan.io/token/${SOLANA_USDC_MINT}`,
+				iconUrls: [],
 			},
 		]);
 	});

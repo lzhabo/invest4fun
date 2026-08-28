@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
+import type { ExecutionPlan } from "../src/domain/schemas.js";
 import {
 	executionLegsFromPlan,
 	executionStatusFromLegs,
 	transitionExecutionLeg,
 } from "../src/server/execution-legs.js";
-import type { ExecutionPlan } from "../src/domain/schemas.js";
 
 const transaction = (assetId: string, commitment: string) => ({
 	kind: "SOLANA_TRANSACTION" as const,
@@ -13,7 +13,11 @@ const transaction = (assetId: string, commitment: string) => ({
 	recentBlockhash: "11111111111111111111111111111111",
 	lastValidBlockHeight: 500,
 	expectedBalanceChanges: [
-		{ assetId, mint: "So11111111111111111111111111111111111111112", minimumAmountOut: "1" },
+		{
+			assetId,
+			mint: "So11111111111111111111111111111111111111112",
+			minimumAmountOut: "1",
+		},
 	],
 });
 
@@ -33,8 +37,18 @@ describe("execution leg state machine", () => {
 		expect(
 			executionLegsFromPlan(plan, new Date("2026-08-27T12:00:00.000Z")),
 		).toEqual([
-			expect.objectContaining({ index: 0, assetIds: ["sol:mainnet:SOL"], amountInBaseUnits: "100000", status: "PREPARED" }),
-			expect.objectContaining({ index: 1, assetIds: ["sol:mainnet:JUP"], amountInBaseUnits: "200000", status: "PREPARED" }),
+			expect.objectContaining({
+				index: 0,
+				assetIds: ["sol:mainnet:SOL"],
+				amountInBaseUnits: "100000",
+				status: "PREPARED",
+			}),
+			expect.objectContaining({
+				index: 1,
+				assetIds: ["sol:mainnet:JUP"],
+				amountInBaseUnits: "200000",
+				status: "PREPARED",
+			}),
 		]);
 	});
 
@@ -44,6 +58,7 @@ describe("execution leg state machine", () => {
 		const broadcasting = transitionExecutionLeg(prepared, {
 			type: "CLAIM_BROADCAST",
 			signature: "known-signature",
+			signedTransactionBase64: "signed",
 			at: "2026-08-27T12:00:00.000Z",
 		});
 		const unknown = transitionExecutionLeg(broadcasting, {
@@ -63,6 +78,7 @@ describe("execution leg state machine", () => {
 			transitionExecutionLeg(prepared, {
 				type: "CLAIM_BROADCAST",
 				signature: "known-signature",
+				signedTransactionBase64: "signed",
 				at: "2026-08-27T12:00:00.000Z",
 			}),
 			{ type: "BROADCAST_UNKNOWN", at: "2026-08-27T12:00:01.000Z" },
@@ -77,6 +93,7 @@ describe("execution leg state machine", () => {
 			transitionExecutionLeg(unknown, {
 				type: "CLAIM_BROADCAST",
 				signature: "duplicate",
+				signedTransactionBase64: "signed",
 				at: "2026-08-27T12:00:02.000Z",
 			}),
 		).toThrow("INVALID_EXECUTION_LEG_TRANSITION");
@@ -89,6 +106,7 @@ describe("execution leg state machine", () => {
 			transitionExecutionLeg(prepared, {
 				type: "CLAIM_BROADCAST",
 				signature: "known-signature",
+				signedTransactionBase64: "signed",
 				at: "2026-08-27T12:00:00.000Z",
 			}),
 			{ type: "BROADCAST_ACCEPTED", at: "2026-08-27T12:00:01.000Z" },
@@ -112,6 +130,7 @@ describe("execution leg state machine", () => {
 				transitionExecutionLeg(leg, {
 					type: "CLAIM_BROADCAST",
 					signature: `signature-${leg.index}`,
+					signedTransactionBase64: `signed-${leg.index}`,
 					at: "2026-08-27T12:00:00.000Z",
 				}),
 				{ type: "BROADCAST_ACCEPTED", at: "2026-08-27T12:00:01.000Z" },

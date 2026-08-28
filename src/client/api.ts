@@ -60,7 +60,7 @@ export interface ExecutionRecord {
 		amountOutBaseUnits: string;
 		transactionHash: string;
 		blockNumber?: string;
-		status: "success" | "failed";
+		status: "success" | "failed" | "unverified";
 	}>;
 	settledAt?: string;
 	legs?: Array<{
@@ -75,6 +75,7 @@ export interface ExecutionRecord {
 			| "SUBMITTED"
 			| "CONFIRMED"
 			| "FINALIZED"
+			| "OUTPUT_UNVERIFIED"
 			| "FAILED"
 			| "UNKNOWN";
 		signature?: string;
@@ -174,6 +175,7 @@ export interface SolanaPortfolioResponse {
 		decimals: number;
 		balanceBaseUnits: string;
 		iconUrl?: string;
+		iconUrls?: string[];
 		explorerUrl?: string;
 		priceUsd?: number;
 		priceUpdatedAt?: string;
