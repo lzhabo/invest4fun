@@ -6,6 +6,7 @@ export function FundingPanel({
 	qrCode,
 	usdcBalance,
 	solBalance,
+	showBalanceStatus = true,
 	loading,
 	error,
 	fundingWalletAddress,
@@ -19,6 +20,7 @@ export function FundingPanel({
 	qrCode?: string;
 	usdcBalance: string;
 	solBalance: string;
+	showBalanceStatus?: boolean;
 	loading: boolean;
 	error?: string;
 	fundingWalletAddress?: string;
@@ -180,19 +182,21 @@ export function FundingPanel({
 				</section>
 			</div>
 
-			<div className="funding-balance-status">
-				<span>{usdcBalance} USDC</span>
-				<span>{solBalance} SOL</span>
-				<button
-					type="button"
-					className="button button-outline"
-					onClick={() => void onRefresh()}
-					disabled={loading}
-				>
-					{loading ? "Checking balance…" : "Refresh balance"}{" "}
-					<RefreshCw aria-hidden="true" />
-				</button>
-			</div>
+			{showBalanceStatus ? (
+				<div className="funding-balance-status">
+					<span>{usdcBalance} USDC</span>
+					<span>{solBalance} SOL</span>
+					<button
+						type="button"
+						className="button button-outline"
+						onClick={() => void onRefresh()}
+						disabled={loading}
+					>
+						{loading ? "Checking balance…" : "Refresh balance"}{" "}
+						<RefreshCw aria-hidden="true" />
+					</button>
+				</div>
+			) : null}
 			{status ? (
 				<p className="funding-status" role="status">
 					{status}
@@ -206,8 +210,8 @@ export function FundingPanel({
 			<p className="account-top-up-note">
 				<Info aria-hidden="true" />
 				<span>
-					Only send USDC on Solana to this address. Keep some SOL in the wallet
-					for network fees.
+					Only send USDC and SOL on the Solana network to this address. USDC
+					funds purchases; SOL pays network fees.
 				</span>
 			</p>
 		</div>

@@ -22,7 +22,7 @@ describe("FundingPanel", () => {
 		expect(html).toContain("account-top-up-copy");
 		expect(html).toContain("Transfer from external wallet");
 		expect(html).toContain("Connect Solana wallet");
-		expect(html).toContain("Only send USDC on Solana");
+		expect(html).toContain("Only send USDC and SOL on the Solana network");
 	});
 
 	it("offers both asset transfers from a connected wallet", () => {

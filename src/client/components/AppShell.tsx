@@ -5,13 +5,7 @@ import {
 	GalleryVerticalEnd,
 	Wallet,
 } from "lucide-react";
-import {
-	type MouseEvent,
-	type ReactNode,
-	useLayoutEffect,
-	useState,
-} from "react";
-import type { AppTheme } from "../theme-settings";
+import { type MouseEvent, type ReactNode, useState } from "react";
 import { type PrimaryView, pathForPrimaryView } from "../view-routing";
 import { WalletMenu } from "./WalletMenu";
 
@@ -87,8 +81,6 @@ interface Props {
 	onWallet?: () => void;
 	walletReady?: boolean;
 	navigationEnabled?: boolean;
-	activeChain: "SOLANA";
-	theme: AppTheme;
 	solanaWallets: ConnectedStandardSolanaWallet[];
 	selectedSolanaWallet?: ConnectedStandardSolanaWallet;
 	onSolanaWalletChange: (wallet: ConnectedStandardSolanaWallet) => void;
@@ -102,39 +94,11 @@ export function AppShell({
 	onWallet,
 	walletReady = true,
 	navigationEnabled = true,
-	activeChain,
-	theme,
 	solanaWallets,
 	selectedSolanaWallet,
 	onSolanaWalletChange,
 	children,
 }: Props) {
-	useLayoutEffect(() => {
-		const root = document.documentElement;
-		const themeColor = document.querySelector<HTMLMetaElement>(
-			'meta[name="theme-color"]',
-		);
-		const previousChain = root.dataset.chain;
-		const previousTheme = root.dataset.theme;
-		const previousThemeColor = themeColor?.content;
-		const chain = activeChain.toLowerCase();
-
-		root.dataset.chain = chain;
-		root.dataset.theme = theme;
-		if (themeColor) {
-			themeColor.content = theme === "dark" ? "#090B0F" : "#f1f3f6";
-		}
-
-		return () => {
-			if (previousChain) root.dataset.chain = previousChain;
-			else delete root.dataset.chain;
-			if (previousTheme) root.dataset.theme = previousTheme;
-			else delete root.dataset.theme;
-			if (themeColor && previousThemeColor)
-				themeColor.content = previousThemeColor;
-		};
-	}, [activeChain, theme]);
-
 	return (
 		<div className="app-shell">
 			<header
@@ -177,11 +141,7 @@ export function AppShell({
 						title="Sign in with Privy"
 					>
 						{navigationEnabled ? <Wallet size={17} strokeWidth={1.7} /> : null}
-						{navigationEnabled
-							? "Connect wallet"
-							: walletReady
-								? "Sign in"
-								: "Loading…"}
+						{walletReady ? "Sign in" : "Loading…"}
 					</button>
 				)}
 			</header>

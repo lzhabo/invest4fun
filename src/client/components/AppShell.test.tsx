@@ -26,8 +26,6 @@ describe("signed-out AppShell", () => {
 		onNavigate: () => {},
 		onWallet: () => {},
 		navigationEnabled: false,
-		activeChain: "SOLANA" as const,
-		theme: "light" as const,
 		solanaWallets: [],
 		onSolanaWalletChange: () => {},
 	};
@@ -46,6 +44,17 @@ describe("signed-out AppShell", () => {
 	it("uses the neutral Sign in label when ready", () => {
 		const html = renderToStaticMarkup(
 			<AppShell {...props} walletReady>
+				<div />
+			</AppShell>,
+		);
+
+		expect(html).toContain(">Sign in</button>");
+		expect(html).not.toContain("Connect wallet");
+	});
+
+	it("uses Sign in when primary navigation is enabled", () => {
+		const html = renderToStaticMarkup(
+			<AppShell {...props} navigationEnabled walletReady>
 				<div />
 			</AppShell>,
 		);

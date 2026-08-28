@@ -23,6 +23,7 @@ import {
 	formatTicketSizeUsd,
 	type OnboardingPreferences,
 } from "../domain/schemas";
+import { resolveAccountBootstrap } from "./account-bootstrap";
 import {
 	ApiError,
 	api,
@@ -32,8 +33,7 @@ import {
 	type PublicConfig,
 	type WeeklySession,
 } from "./api";
-import { resolveAccountBootstrap } from "./account-bootstrap";
-import { resolveAppEntryView, type AppEntryStage } from "./app-entry-route";
+import { type AppEntryStage, resolveAppEntryView } from "./app-entry-route";
 import { feedBasketSelections } from "./basket-selections";
 import { chartPrefetchRequests } from "./chart-loading-policy";
 import { AccountScreen } from "./components/AccountScreen";
@@ -41,17 +41,19 @@ import { AppShell } from "./components/AppShell";
 import { AssetIconProvider } from "./components/AssetMark";
 import { BudgetRail } from "./components/BudgetRail";
 import { FeedCardSkeleton } from "./components/FeedCardSkeleton";
+import { FundingNotifications } from "./components/FundingNotifications";
 import { FundingScreen } from "./components/FundingScreen";
-import { AppBootstrapSkeleton } from "./components/PageSkeletons";
 import { Confetti } from "./components/magicui/confetti";
 import { Onboarding } from "./components/Onboarding";
+import { AppBootstrapSkeleton } from "./components/PageSkeletons";
 import { PositionsScreen } from "./components/PositionsScreen";
 import { ReceiptScreen } from "./components/ReceiptScreen";
 import { ReviewScreen } from "./components/ReviewScreen";
 import { SwipeCard } from "./components/SwipeCard";
+import { mergeRefreshedFeed } from "./feed-refresh";
 import { openFeedSession } from "./feed-session";
 import { checkFundingWithin } from "./funding-check";
-import { mergeRefreshedFeed } from "./feed-refresh";
+import { stageAfterPrimaryNavigation } from "./funding-navigation";
 import {
 	readAccountPreferences,
 	removeLegacyPreferences,
@@ -61,18 +63,14 @@ import {
 	findEmbeddedSolanaWallet,
 	findExternalSolanaWallet,
 } from "./solana-wallet-selection";
+import type { AppTheme, ThemeSettings } from "./theme-settings";
 import { copyWalletAddress, useWalletFunding } from "./use-wallet-funding";
-import { hasReceivedFunds, shouldShowFunding } from "./wallet-funding";
 import {
-	readThemeSettings,
-	type AppTheme,
-	writeThemeSettings,
-} from "./theme-settings";
-import {
+	type PrimaryView,
 	pathForPrimaryView,
 	primaryViewFromPathname,
-	type PrimaryView,
 } from "./view-routing";
+import { shouldShowFunding } from "./wallet-funding";
 
 type View = PrimaryView | "receipts";
 type Stage = AppEntryStage;
@@ -137,7 +135,15 @@ async function generateFeedWithRetry(
 	}
 }
 
-export function App({ config }: { config: PublicConfig }) {
+export function App({
+	config,
+	themeSettings,
+	onThemeSettingsChange,
+}: {
+	config: PublicConfig;
+	themeSettings: ThemeSettings;
+	onThemeSettingsChange: (settings: ThemeSettings) => void;
+}) {
 	const {
 		authenticated,
 		getAccessToken,
@@ -161,11 +167,9 @@ export function App({ config }: { config: PublicConfig }) {
 		  }
 		| undefined
 	>();
-	const [onboardingChain, setOnboardingChain] = useState<"SOLANA">("SOLANA");
 	const [session, setSession] = useState<WeeklySession>();
 	const [feed, setFeed] = useState<FeedResponse>();
 	const [preferences, setPreferences] = useState<OnboardingPreferences>();
-	const [themeSettings, setThemeSettings] = useState(readThemeSettings);
 	const [index, setIndex] = useState(0);
 	const [selectedIds, setSelectedIds] = useState<string[]>([]);
 	const [retrySelections, setRetrySelections] = useState<
@@ -188,23 +192,17 @@ export function App({ config }: { config: PublicConfig }) {
 	const [planNotice, setPlanNotice] = useState("");
 	const [fundingReturn, setFundingReturn] =
 		useState<FundingReturn>("open-session");
+	const [fundingActive, setFundingActive] = useState(false);
 	const decisionTimer = useRef<number | undefined>(undefined);
 	const bootstrapRequestId = useRef(0);
-	const browsingWithoutFunding = useRef(false);
 	const lastFundingWallet = useRef("");
 	const warningsByAssetId = useRef(new Map<string, string[]>());
 	const activeChain = preferences?.activeChain ?? "SOLANA";
-	const shellChain = stage === "onboarding" ? onboardingChain : activeChain;
-	const activeTheme = themeSettings[shellChain];
 	const saveTheme = useCallback(
 		(theme: AppTheme) => {
-			setThemeSettings((current) => {
-				const next = { ...current, [activeChain]: theme };
-				writeThemeSettings(next);
-				return next;
-			});
+			onThemeSettingsChange({ ...themeSettings, [activeChain]: theme });
 		},
-		[activeChain],
+		[activeChain, onThemeSettingsChange, themeSettings],
 	);
 	const selectedSolanaWallet = findEmbeddedSolanaWallet(
 		solanaWallets,
@@ -258,7 +256,7 @@ export function App({ config }: { config: PublicConfig }) {
 
 	useEffect(() => {
 		if (lastFundingWallet.current !== wallet) {
-			browsingWithoutFunding.current = false;
+			setFundingActive(false);
 			lastFundingWallet.current = wallet;
 		}
 	}, [wallet]);
@@ -289,12 +287,19 @@ export function App({ config }: { config: PublicConfig }) {
 			if (!target) return;
 			scrollToTop();
 			setView(target);
-			setStage((current) => (current === "onboarding" ? current : "swipe"));
+			setStage((current) =>
+				stageAfterPrimaryNavigation({
+					currentStage: current,
+					target,
+					fundingActive,
+					hasFeed: Boolean(feed),
+				}),
+			);
 		};
 
 		window.addEventListener("popstate", handlePopState);
 		return () => window.removeEventListener("popstate", handlePopState);
-	}, []);
+	}, [feed, fundingActive]);
 
 	useEffect(() => {
 		if (!wallet) return;
@@ -360,13 +365,10 @@ export function App({ config }: { config: PublicConfig }) {
 					);
 					if (
 						fundingCheck.status === "resolved" &&
-						shouldShowFunding(
-							fundingCheck.value.state,
-							browsingWithoutFunding.current,
-							hasReceivedFunds(fundingCheck.value.balance),
-						)
+						shouldShowFunding(fundingCheck.value.state)
 					) {
 						setFundingReturn("open-session");
+						setFundingActive(true);
 						setStage("funding");
 						return;
 					}
@@ -753,12 +755,14 @@ export function App({ config }: { config: PublicConfig }) {
 			}
 		}
 		if (!authenticated || stage === "onboarding") return;
-		if (
-			stage === "review" ||
-			(target === "week" && stage === "loading" && feed)
-		) {
-			setStage("swipe");
-		}
+		setStage(
+			stageAfterPrimaryNavigation({
+				currentStage: stage,
+				target: target === "receipts" ? "positions" : target,
+				fundingActive,
+				hasFeed: Boolean(feed),
+			}),
+		);
 	}
 
 	const applyWalletPreferences = useCallback(
@@ -792,21 +796,18 @@ export function App({ config }: { config: PublicConfig }) {
 		[getAccessToken, loadSession, preferences],
 	);
 
-	const leaveFunding = useCallback(
-		async (browseWithoutFunding = false) => {
-			if (!preferences) return;
-			if (browseWithoutFunding) browsingWithoutFunding.current = true;
-			if (fundingReturn === "open-session") {
-				await loadSession(preferences, {
-					persistPreferences: false,
-					skipFundingCheck: true,
-				});
-				return;
-			}
-			setStage(fundingReturn);
-		},
-		[fundingReturn, loadSession, preferences],
-	);
+	const leaveFunding = useCallback(async () => {
+		if (!preferences) return;
+		setFundingActive(false);
+		if (fundingReturn === "open-session") {
+			await loadSession(preferences, {
+				persistPreferences: false,
+				skipFundingCheck: true,
+			});
+			return;
+		}
+		setStage(fundingReturn);
+	}, [fundingReturn, loadSession, preferences]);
 
 	if (entryView === "SKELETON") {
 		if (!bootstrapIssue) return <AppBootstrapSkeleton />;
@@ -846,14 +847,16 @@ export function App({ config }: { config: PublicConfig }) {
 				onWallet={connectWallet}
 				walletReady={privyReady && (!authenticated || solanaWalletsReady)}
 				navigationEnabled
-				activeChain={shellChain}
-				theme={activeTheme}
 				solanaWallets={solanaWallets}
 				selectedSolanaWallet={selectedSolanaWallet}
 				onSolanaWalletChange={(selected) => {
 					void applyWalletPreferences("SOLANA", selected);
 				}}
 			>
+				<FundingNotifications
+					receipts={walletFunding.receipts}
+					onDismiss={walletFunding.dismissReceipt}
+				/>
 				{planNotice ? (
 					<div className="app-notice" role="status">
 						{planNotice}
@@ -867,10 +870,10 @@ export function App({ config }: { config: PublicConfig }) {
 								<p>Swipe right to add, left to skip.</p>
 							</header>
 							<div className="fatal-state wallet-required-state">
-								<h2>Connect your wallet first</h2>
+								<h2>Sign in first</h2>
 								<p>
-									Connect a wallet before viewing your personalized feed and
-									building a basket.
+									Sign in before viewing your personalized feed and building a
+									basket.
 								</p>
 								<button
 									type="button"
@@ -881,7 +884,7 @@ export function App({ config }: { config: PublicConfig }) {
 								>
 									{!privyReady || (authenticated && !solanaWalletsReady)
 										? "Loading wallet…"
-										: "Connect wallet"}
+										: "Sign in"}
 								</button>
 							</div>
 						</section>
@@ -891,15 +894,15 @@ export function App({ config }: { config: PublicConfig }) {
 						config={config}
 						onComplete={loadSession}
 						privyReady={privyReady}
-						onChainPreview={setOnboardingChain}
+						onChainPreview={() => undefined}
 					/>
 				) : stage === "funding" && preferences ? (
 					<FundingScreen
 						wallet={wallet}
 						state={walletFunding.state ?? "UNFUNDED"}
-						fundsReceived={walletFunding.fundsReceived}
 						usdcBalance={walletFunding.usdcBalance}
 						solBalance={walletFunding.solBalance}
+						ticketSizeUsd={preferences.ticketSizeUsd}
 						loading={walletFunding.loading}
 						error={walletFunding.error}
 						qrCode={walletFunding.qrCode}
@@ -915,7 +918,6 @@ export function App({ config }: { config: PublicConfig }) {
 						onSendSol={walletFunding.sendSol}
 						onRefresh={() => walletFunding.refresh()}
 						onContinue={() => void leaveFunding()}
-						onBrowse={() => void leaveFunding(true)}
 					/>
 				) : view === "receipts" ? (
 					<ReceiptScreen
@@ -1048,6 +1050,7 @@ export function App({ config }: { config: PublicConfig }) {
 						}}
 						onTopUp={() => {
 							setFundingReturn("review");
+							setFundingActive(true);
 							setStage("funding");
 						}}
 						periodLimitUsd={periodLimitUsd}
@@ -1123,6 +1126,7 @@ export function App({ config }: { config: PublicConfig }) {
 										className="button button-primary"
 										onClick={() => {
 											setFundingReturn("swipe");
+											setFundingActive(true);
 											setStage("funding");
 										}}
 									>

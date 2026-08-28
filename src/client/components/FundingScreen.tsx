@@ -1,4 +1,4 @@
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, CheckCircle2, Circle, RefreshCw } from "lucide-react";
 import { useEffect } from "react";
 import type { WalletFundingState } from "../wallet-funding";
 import { FundingPanel } from "./FundingPanel";
@@ -6,9 +6,9 @@ import { FundingPanel } from "./FundingPanel";
 export function FundingScreen({
 	wallet,
 	state,
-	fundsReceived = false,
 	usdcBalance,
 	solBalance,
+	ticketSizeUsd = 0.1,
 	loading,
 	error,
 	qrCode,
@@ -19,13 +19,12 @@ export function FundingScreen({
 	onSendSol,
 	onRefresh,
 	onContinue,
-	onBrowse,
 }: {
 	wallet: string;
 	state: WalletFundingState;
-	fundsReceived?: boolean;
 	usdcBalance: string;
 	solBalance: string;
+	ticketSizeUsd?: number;
 	loading: boolean;
 	error?: string;
 	qrCode?: string;
@@ -36,10 +35,10 @@ export function FundingScreen({
 	onSendSol?: (amount: number) => void | Promise<void>;
 	onRefresh: () => void;
 	onContinue: () => void;
-	onBrowse: () => void;
 }) {
 	const ready = state === "READY";
-	const canContinue = ready || fundsReceived;
+	const usdcReady = Number(usdcBalance) >= ticketSizeUsd;
+	const solReady = Number(solBalance) >= 0.003;
 	useEffect(() => {
 		const timer = window.setInterval(() => void onRefresh(), 5_000);
 		return () => window.clearInterval(timer);
@@ -48,24 +47,54 @@ export function FundingScreen({
 		<main className="account-page funding-page">
 			<header className="account-heading">
 				<span className="account-label">Wallet setup</span>
-				<h1>
-					{ready
-						? "Wallet ready"
-						: fundsReceived
-							? "Funds received"
-							: fundingTitle(state)}
-				</h1>
+				<h1>{ready ? "Wallet ready" : fundingTitle(state)}</h1>
 				<p>
 					USDC pays for your investments. SOL covers network fees and the first
 					token-account setup.
 				</p>
 			</header>
+			<section className="funding-readiness" aria-label="Wallet balances">
+				<div className={usdcReady ? "is-ready" : "is-needed"}>
+					{usdcReady ? (
+						<CheckCircle2 aria-hidden="true" />
+					) : (
+						<Circle aria-hidden="true" />
+					)}
+					<span>
+						<strong>USDC for purchases</strong>
+						<small>{formatRequiredUsdc(ticketSizeUsd)} USDC required</small>
+					</span>
+					<b>{usdcBalance} USDC</b>
+				</div>
+				<div className={solReady ? "is-ready" : "is-needed"}>
+					{solReady ? (
+						<CheckCircle2 aria-hidden="true" />
+					) : (
+						<Circle aria-hidden="true" />
+					)}
+					<span>
+						<strong>SOL for network fees</strong>
+						<small>0.003 SOL required</small>
+					</span>
+					<b>{solBalance} SOL</b>
+				</div>
+				<button
+					type="button"
+					className="button button-outline"
+					onClick={onRefresh}
+					disabled={loading}
+				>
+					{loading ? "Checking balance…" : "Refresh balance"}
+					<RefreshCw aria-hidden="true" />
+				</button>
+			</section>
 
 			<FundingPanel
 				wallet={wallet}
 				qrCode={qrCode}
 				usdcBalance={usdcBalance}
 				solBalance={solBalance}
+				showBalanceStatus={false}
 				loading={loading}
 				error={error}
 				fundingWalletAddress={fundingWalletAddress}
@@ -77,7 +106,7 @@ export function FundingScreen({
 			/>
 
 			<div className="funding-screen-actions">
-				{canContinue ? (
+				{ready ? (
 					<button
 						type="button"
 						className="button button-primary"
@@ -86,18 +115,18 @@ export function FundingScreen({
 						Continue to feed <ArrowRight aria-hidden="true" />
 					</button>
 				) : null}
-				{!canContinue ? (
-					<button
-						type="button"
-						className="onboarding-text-button"
-						onClick={onBrowse}
-					>
-						Browse feed without funding
-					</button>
-				) : null}
 			</div>
 		</main>
 	);
+}
+
+function formatRequiredUsdc(ticketSizeUsd: number) {
+	return ticketSizeUsd.toFixed(Math.max(2, decimalPlaces(ticketSizeUsd)));
+}
+
+function decimalPlaces(value: number) {
+	const fraction = value.toString().split(".")[1];
+	return fraction?.length ?? 0;
 }
 
 function fundingTitle(state: WalletFundingState) {

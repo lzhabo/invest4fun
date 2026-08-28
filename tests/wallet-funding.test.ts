@@ -44,11 +44,11 @@ describe("classifyWalletFunding", () => {
 });
 
 describe("shouldShowFunding", () => {
-	it("gates an unfunded wallet until the user explicitly chooses to browse", () => {
-		expect(shouldShowFunding("UNFUNDED", false)).toBe(true);
-		expect(shouldShowFunding("UNFUNDED", true)).toBe(false);
-		expect(shouldShowFunding("NEEDS_USDC", false, true)).toBe(false);
-		expect(shouldShowFunding("READY", false)).toBe(false);
+	it("does not treat a partial deposit as a funded wallet", () => {
+		expect(shouldShowFunding("UNFUNDED")).toBe(true);
+		expect(shouldShowFunding("NEEDS_USDC")).toBe(true);
+		expect(shouldShowFunding("NEEDS_SOL")).toBe(true);
+		expect(shouldShowFunding("READY")).toBe(false);
 	});
 });
 

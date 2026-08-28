@@ -17,7 +17,6 @@ describe("FundingScreen", () => {
 				onConnectExternalWallet={() => {}}
 				onRefresh={() => {}}
 				onContinue={() => {}}
-				onBrowse={() => {}}
 			/>,
 		);
 
@@ -27,7 +26,7 @@ describe("FundingScreen", () => {
 		expect(html).toContain(wallet);
 		expect(html).toContain("Copy address");
 		expect(html).toContain("Connect Solana wallet");
-		expect(html).toContain("Browse feed without funding");
+		expect(html).not.toContain("Browse feed without funding");
 	});
 
 	it("asks only for SOL when the wallet already has enough USDC", () => {
@@ -42,7 +41,6 @@ describe("FundingScreen", () => {
 				onConnectExternalWallet={() => {}}
 				onRefresh={() => {}}
 				onContinue={() => {}}
-				onBrowse={() => {}}
 			/>,
 		);
 
@@ -65,7 +63,6 @@ describe("FundingScreen", () => {
 				onSendSol={() => {}}
 				onRefresh={() => {}}
 				onContinue={() => {}}
-				onBrowse={() => {}}
 			/>,
 		);
 
@@ -75,25 +72,24 @@ describe("FundingScreen", () => {
 		expect(html).toContain("Send SOL");
 	});
 
-	it("lets the user continue after receiving any positive amount", () => {
+	it("keeps partial funding actionable without claiming the wallet is ready", () => {
 		const html = renderToStaticMarkup(
 			<FundingScreen
 				wallet={wallet}
 				state="NEEDS_USDC"
-				fundsReceived
 				usdcBalance="0.01"
-				solBalance="0"
+				solBalance="0.003"
 				loading={false}
 				onCopyAddress={() => {}}
 				onConnectExternalWallet={() => {}}
 				onRefresh={() => {}}
 				onContinue={() => {}}
-				onBrowse={() => {}}
 			/>,
 		);
 
-		expect(html).toContain("Funds received");
-		expect(html).toContain("Continue to feed");
-		expect(html).not.toContain("Wallet ready");
+		expect(html).toContain("Add USDC to invest");
+		expect(html).toContain("0.10 USDC required");
+		expect(html).not.toContain("Continue to feed");
+		expect(html).not.toContain("Funds received");
 	});
 });

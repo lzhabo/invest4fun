@@ -8,12 +8,15 @@ import { formatUnits } from "viem";
 import { SOLANA_USDC_MINT } from "../domain/solana";
 import { api, type SolanaBalanceResponse } from "./api";
 import {
+	type FundingReceiptNotification,
+	fundingReceiptNotifications,
+} from "./funding-notifications";
+import {
 	buildSolFundingTransaction,
 	buildUsdcFundingTransaction,
 } from "./funding-transactions";
 import {
 	classifyWalletFunding,
-	hasReceivedFunds,
 	type WalletFundingState,
 } from "./wallet-funding";
 
@@ -32,7 +35,9 @@ export function useWalletFunding({
 	const [loading, setLoading] = useState(Boolean(wallet));
 	const [error, setError] = useState("");
 	const [qrCode, setQrCode] = useState("");
+	const [receipts, setReceipts] = useState<FundingReceiptNotification[]>([]);
 	const lastWallet = useRef("");
+	const previousBalance = useRef<SolanaBalanceResponse | undefined>(undefined);
 
 	const refresh = useCallback(
 		async (requiredTicketSizeUsd = ticketSizeUsd, signal?: AbortSignal) => {
@@ -45,6 +50,18 @@ export function useWalletFunding({
 					...nextBalance,
 					ticketSizeUsd: requiredTicketSizeUsd,
 				});
+				const received = fundingReceiptNotifications(
+					previousBalance.current,
+					nextBalance,
+				);
+				previousBalance.current = nextBalance;
+				if (received.length) {
+					setReceipts((current) => {
+						const next = new Map(current.map((item) => [item.asset, item]));
+						for (const receipt of received) next.set(receipt.asset, receipt);
+						return [...next.values()];
+					});
+				}
 				setBalance(nextBalance);
 				setState(nextState);
 				return { balance: nextBalance, state: nextState };
@@ -67,6 +84,8 @@ export function useWalletFunding({
 		if (lastWallet.current !== wallet) {
 			lastWallet.current = wallet;
 			setBalance(undefined);
+			previousBalance.current = undefined;
+			setReceipts([]);
 			setState(undefined);
 			setError("");
 		}
@@ -136,7 +155,11 @@ export function useWalletFunding({
 		solBalance: balance
 			? formatUnits(BigInt(balance.solBalanceLamports), 9)
 			: "0",
-		fundsReceived: balance ? hasReceivedFunds(balance) : false,
+		receipts,
+		dismissReceipt: (asset: FundingReceiptNotification["asset"]) =>
+			setReceipts((current) =>
+				current.filter((receipt) => receipt.asset !== asset),
+			),
 		refresh,
 		sendUsdc: (amount: number) => send("USDC", amount),
 		sendSol: (amount: number) => send("SOL", amount),

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	applyDocumentTheme,
 	DEFAULT_THEME_SETTINGS,
 	readThemeSettings,
 	type ThemeStorage,
@@ -39,5 +40,18 @@ describe("theme settings", () => {
 		storage.value = JSON.stringify({ SOLANA: "green" });
 
 		expect(readThemeSettings(storage)).toEqual(DEFAULT_THEME_SETTINGS);
+	});
+
+	it("applies the active theme above screens that mount and unmount", () => {
+		const root = { dataset: {} as Record<string, string> };
+		const themeColor = { content: "#f1f3f6" };
+		applyDocumentTheme("dark", {
+			documentElement: root,
+			querySelector: () => themeColor,
+		});
+
+		expect(root.dataset.theme).toBe("dark");
+		expect(root.dataset.chain).toBe("solana");
+		expect(themeColor.content).toBe("#090B0F");
 	});
 });

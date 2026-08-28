@@ -12,6 +12,11 @@ export interface ThemeStorage {
 	setItem(key: string, value: string): void;
 }
 
+interface ThemeDocument {
+	documentElement: { dataset: Record<string, string | undefined> };
+	querySelector(selector: string): { content: string } | null;
+}
+
 function browserStorage(): ThemeStorage | undefined {
 	return (globalThis as { localStorage?: ThemeStorage }).localStorage;
 }
@@ -35,4 +40,17 @@ export function writeThemeSettings(
 	storage = browserStorage(),
 ) {
 	storage?.setItem(THEME_SETTINGS_KEY, JSON.stringify(settings));
+}
+
+export function applyDocumentTheme(
+	theme: AppTheme,
+	documentTarget = (globalThis as { document?: ThemeDocument }).document,
+) {
+	if (!documentTarget) return;
+	documentTarget.documentElement.dataset.chain = "solana";
+	documentTarget.documentElement.dataset.theme = theme;
+	const themeColor = documentTarget.querySelector('meta[name="theme-color"]');
+	if (themeColor) {
+		themeColor.content = theme === "dark" ? "#090B0F" : "#f1f3f6";
+	}
 }
