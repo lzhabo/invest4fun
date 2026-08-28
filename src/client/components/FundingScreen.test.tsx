@@ -26,7 +26,7 @@ describe("FundingScreen", () => {
 		expect(html).toContain(wallet);
 		expect(html).toContain("Copy address");
 		expect(html).toContain("Connect Solana wallet");
-		expect(html).not.toContain("Browse feed without funding");
+		expect(html).toContain("Browse feed without funding");
 	});
 
 	it("asks only for SOL when the wallet already has enough USDC", () => {
@@ -90,6 +90,7 @@ describe("FundingScreen", () => {
 		expect(html).toContain("Add USDC to invest");
 		expect(html).toContain("0.10 USDC required");
 		expect(html).not.toContain("Continue to feed");
+		expect(html).toContain("Browse feed without funding");
 		expect(html).not.toContain("Funds received");
 	});
 });

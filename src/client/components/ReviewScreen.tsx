@@ -14,6 +14,7 @@ import {
 	reviewInteractionsLocked,
 	type ReviewExecutionPhase,
 } from "../review-interaction-lock";
+import { reviewQuoteMap } from "../review-quotes";
 import { shouldOfferTopUp } from "../wallet-funding";
 import {
 	executionMatchesReviewBasket,
@@ -179,8 +180,12 @@ export function ReviewScreen({
 	const executionWalletReady = Boolean(
 		solanaWallet && solanaWallet.address === wallet,
 	);
-	const quoteByAssetId = new Map(
-		(activeRecord?.plan.quotes ?? []).map((quote) => [quote.assetId, quote]),
+	const quoteByAssetId = reviewQuoteMap(
+		activeRecord?.plan.quotes,
+		selections.map(({ candidate, amountInBaseUnits }) => ({
+			amountInBaseUnits,
+			quote: candidate.quote,
+		})),
 	);
 
 	const prepare = useCallback(async () => {
