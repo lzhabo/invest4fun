@@ -53,6 +53,12 @@ describe("Privy production security headers", () => {
 		);
 	});
 
+	it("reports readiness without exposing dependency details", async () => {
+		await request(app)
+			.get("/api/health/ready")
+			.expect(200, { status: "ready" });
+	});
+
 	it("keeps the Vercel page policy aligned with the server policy", () => {
 		const config = JSON.parse(
 			readFileSync(new URL("../vercel.json", import.meta.url), "utf8"),

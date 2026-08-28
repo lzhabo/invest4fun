@@ -243,6 +243,7 @@ export class ApiError extends Error {
 		public readonly code: string,
 		message: string,
 		public readonly details: Record<string, unknown>,
+		public readonly requestId?: string,
 	) {
 		super(message);
 		this.name = "ApiError";
@@ -261,6 +262,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	const wallet = requestAuthProvider?.getWalletAddress();
 	const txOrigin = requestAuthProvider?.getTxOriginAddress();
 	const chain = requestAuthProvider?.getWalletChain() ?? "SOLANA";
+	const requestId = crypto.randomUUID();
 	const response = await fetch(path, {
 		...init,
 		headers: {
@@ -269,6 +271,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 			...(wallet ? { "X-Wallet-Address": wallet } : {}),
 			...(txOrigin ? { "X-Tx-Origin-Address": txOrigin } : {}),
 			"X-Wallet-Chain": chain,
+			"X-Request-Id": requestId,
 			...init?.headers,
 		},
 	});
@@ -282,7 +285,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 			typeof details.message === "string"
 				? details.message
 				: apiErrorMessage(code);
-		throw new ApiError(code, message, details);
+		throw new ApiError(
+			code,
+			message,
+			details,
+			response.headers.get("x-request-id") ?? requestId,
+		);
 	}
 	return body as T;
 }

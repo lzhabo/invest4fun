@@ -1,19 +1,24 @@
+import "./instrument.js";
 import { config as loadEnvironment } from "dotenv";
 import { loadConfig } from "./config.js";
 import { createServerApp } from "./bootstrap.js";
 
-loadEnvironment({ path: ".env.local" });
-loadEnvironment({ path: ".env" });
+loadEnvironment({ path: ".env.local", quiet: true });
+loadEnvironment({ path: ".env", quiet: true });
 
 const config = loadConfig();
 const app = createServerApp();
 
 app.listen(config.PORT, () => {
-  console.log(
-    JSON.stringify({
-      event: "server_started",
-      port: config.PORT,
-      mode: config.localLiveExecution ? "local-live" : config.demoMode ? "demo" : "live"
-    })
-  );
+	console.log(
+		JSON.stringify({
+			event: "server_started",
+			port: config.PORT,
+			mode: config.localLiveExecution
+				? "local-live"
+				: config.demoMode
+					? "demo"
+					: "live",
+		}),
+	);
 });

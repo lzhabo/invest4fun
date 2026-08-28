@@ -78,6 +78,10 @@ export class PostgresStateStore implements StateStore {
 		});
 	}
 
+	async healthCheck() {
+		await this.pool.query("SELECT 1");
+	}
+
 	async getAccount(privyUserId: string): Promise<UserAccount | undefined> {
 		const result = await this.pool.query<UserAccountRow>(
 			`SELECT privy_user_id, canonical_solana_wallet, timezone,
