@@ -7,12 +7,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatUnits } from "viem";
 import type { Candidate } from "../../domain/schemas";
 import { formatTicketSizeUsd } from "../../domain/schemas";
-import type {
-	ExecutionRecord,
-	FeedResponse,
-	WeeklySession,
-} from "../api";
+import type { ExecutionRecord, FeedResponse, WeeklySession } from "../api";
 import { ApiError, api } from "../api";
+import { shouldOfferTopUp } from "../wallet-funding";
 import {
 	executionMatchesReviewBasket,
 	executionPlanHashMatchesReviewBasket,
@@ -35,6 +32,7 @@ export function ReviewScreen({
 	onExecutionInvalidated,
 	onSessionExpired,
 	onStartAnotherBasket,
+	onTopUp,
 	periodLimitUsd,
 	wallet,
 	liveExecution,
@@ -54,6 +52,7 @@ export function ReviewScreen({
 	onExecutionInvalidated: () => void;
 	onSessionExpired: () => Promise<{ sessionId: string; assetIds: string[] }>;
 	onStartAnotherBasket: () => void;
+	onTopUp: () => void;
 	periodLimitUsd: number;
 	wallet: string;
 	liveExecution: boolean;
@@ -68,7 +67,7 @@ export function ReviewScreen({
 		"idle" | "refreshing" | "simulating" | "signing" | "settling"
 	>("refreshing");
 	const [error, setError] = useState("");
-	const [, setErrorCode] = useState("");
+	const [errorCode, setErrorCode] = useState("");
 	const [unavailableAssetIds, setUnavailableAssetIds] = useState<string[]>([]);
 	const [executionConflict, setExecutionConflict] = useState(false);
 	const [now, setNow] = useState(() => Date.now());
@@ -102,13 +101,7 @@ export function ReviewScreen({
 			periodLimitUsd,
 			wallet,
 		}),
-		[
-			selections,
-			session.epochId,
-			session.id,
-			periodLimitUsd,
-			wallet,
-		],
+		[selections, session.epochId, session.id, periodLimitUsd, wallet],
 	);
 	const basketKey = reviewBasketKey(basket);
 	const currentBasketKey = useRef(basketKey);
@@ -391,59 +384,57 @@ export function ReviewScreen({
 			return;
 		}
 		if (!solanaWallet || solanaWallet.address !== wallet) {
-				setError(
-					"Select the prepared Solana signing wallet before continuing.",
-				);
+			setError("Select the prepared Solana signing wallet before continuing.");
+			return;
+		}
+		setLoading(true);
+		setError("");
+		try {
+			setPhase("signing");
+			const signedTransactions: string[] = [];
+			for (const [index, prepared] of solanaTransactions.entries()) {
+				const { signedTransaction } = await signTransaction({
+					transaction: base64ToBytes(prepared.unsignedTransactionBase64),
+					wallet: solanaWallet,
+					chain: "solana:mainnet",
+					options: {
+						uiOptions: {
+							showWalletUIs: false,
+							description: perLegSolana
+								? `Sign swap ${index + 1} of ${solanaTransactions.length}. Swaps settle independently.`
+								: `Invest ${formatTicketSizeUsd(total)} USDC through Jupiter. Every swap succeeds or none do.`,
+							buttonText: perLegSolana
+								? `Sign swap ${index + 1} of ${solanaTransactions.length}`
+								: `Sign & invest ${formatTicketSizeUsd(total)} USDC`,
+						},
+					},
+				});
+				signedTransactions.push(bytesToBase64(signedTransaction));
+			}
+			const submitted = await api.submitSolana(
+				activeRecord.plan.executionId,
+				signedTransactions,
+			);
+			setRecord(submitted);
+			onExecutionChange(submitted);
+			if (["SETTLED", "PARTIAL", "FAILED"].includes(submitted.status)) {
+				onSettled(submitted);
 				return;
 			}
-			setLoading(true);
-			setError("");
-			try {
-				setPhase("signing");
-				const signedTransactions: string[] = [];
-				for (const [index, prepared] of solanaTransactions.entries()) {
-					const { signedTransaction } = await signTransaction({
-						transaction: base64ToBytes(prepared.unsignedTransactionBase64),
-						wallet: solanaWallet,
-						chain: "solana:mainnet",
-						options: {
-							uiOptions: {
-								showWalletUIs: false,
-								description: perLegSolana
-									? `Sign swap ${index + 1} of ${solanaTransactions.length}. Swaps settle independently.`
-									: `Invest ${formatTicketSizeUsd(total)} USDC through Jupiter. Every swap succeeds or none do.`,
-								buttonText: perLegSolana
-									? `Sign swap ${index + 1} of ${solanaTransactions.length}`
-									: `Sign & invest ${formatTicketSizeUsd(total)} USDC`,
-							},
-						},
-					});
-					signedTransactions.push(bytesToBase64(signedTransaction));
-				}
-				const submitted = await api.submitSolana(
-					activeRecord.plan.executionId,
-					signedTransactions,
-				);
-				setRecord(submitted);
-				onExecutionChange(submitted);
-				if (["SETTLED", "PARTIAL", "FAILED"].includes(submitted.status)) {
-					onSettled(submitted);
-					return;
-				}
-				setPhase("settling");
-				const reconciled = await reconcileUntilTerminal(
-					activeRecord.plan.executionId,
-				);
-				setRecord(reconciled);
-				onExecutionChange(reconciled);
-				onSettled(reconciled);
-			} catch (caught) {
-				setError(executionErrorMessage(caught));
-			} finally {
-				setLoading(false);
-				setPhase("idle");
-			}
-			return;
+			setPhase("settling");
+			const reconciled = await reconcileUntilTerminal(
+				activeRecord.plan.executionId,
+			);
+			setRecord(reconciled);
+			onExecutionChange(reconciled);
+			onSettled(reconciled);
+		} catch (caught) {
+			setError(executionErrorMessage(caught));
+		} finally {
+			setLoading(false);
+			setPhase("idle");
+		}
+		return;
 	}
 
 	async function resumeReconciliation() {
@@ -483,9 +474,20 @@ export function ReviewScreen({
 								: "Demo quotes are ready for a simulated confirmation."}
 					</p>
 					{error ? (
-						<p className="review-error" role="alert">
-							{error}
-						</p>
+						<div className="review-error-actions">
+							<p className="review-error" role="alert">
+								{error}
+							</p>
+							{shouldOfferTopUp(errorCode) ? (
+								<button
+									type="button"
+									className="button button-outline"
+									onClick={onTopUp}
+								>
+									Top up wallet
+								</button>
+							) : null}
+						</div>
 					) : null}
 				</header>
 				<div className="ledger-table">
@@ -758,9 +760,7 @@ export function ReviewScreen({
 							onClick={prepare}
 							disabled={loading || !selected.length}
 						>
-							{loading
-								? "Refreshing…"
-								: "Refresh quotes"}{" "}
+							{loading ? "Refreshing…" : "Refresh quotes"}{" "}
 							{loading ? (
 								<LoaderCircle className="button-spinner" />
 							) : (
@@ -824,9 +824,7 @@ function preparationErrorMessage(caught: unknown) {
 	const message =
 		caught instanceof Error ? caught.message : "Could not prepare execution";
 	if (
-		/^sol:mainnet:[A-Za-z0-9]+ is not currently executable\.?$/i.test(
-			message,
-		)
+		/^sol:mainnet:[A-Za-z0-9]+ is not currently executable\.?$/i.test(message)
 	) {
 		return "One or more selected assets do not have a fresh Jupiter route. Remove the unavailable asset or return to the feed and choose another token.";
 	}

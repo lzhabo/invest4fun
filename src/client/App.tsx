@@ -39,6 +39,7 @@ import { AppShell } from "./components/AppShell";
 import { AssetIconProvider } from "./components/AssetMark";
 import { BudgetRail } from "./components/BudgetRail";
 import { FeedCardSkeleton } from "./components/FeedCardSkeleton";
+import { FundingScreen } from "./components/FundingScreen";
 import { AppBootstrapSkeleton } from "./components/PageSkeletons";
 import { Confetti } from "./components/magicui/confetti";
 import { Onboarding } from "./components/Onboarding";
@@ -57,6 +58,8 @@ import {
 	findEmbeddedSolanaWallet,
 	findExternalSolanaWallet,
 } from "./solana-wallet-selection";
+import { copyWalletAddress, useWalletFunding } from "./use-wallet-funding";
+import { shouldShowFunding } from "./wallet-funding";
 import {
 	readThemeSettings,
 	type AppTheme,
@@ -69,7 +72,14 @@ import {
 } from "./view-routing";
 
 type View = PrimaryView | "receipts";
-type Stage = "bootstrapping" | "loading" | "onboarding" | "swipe" | "review";
+type Stage =
+	| "bootstrapping"
+	| "loading"
+	| "onboarding"
+	| "funding"
+	| "swipe"
+	| "review";
+type FundingReturn = "open-session" | "swipe" | "review";
 type DecisionFeedback = "invest" | "skip";
 const LAST_EXECUTION_KEY = "investmade:last-execution";
 const LAST_EXECUTION_CANDIDATES_KEY = "investmade:last-execution-candidates";
@@ -140,7 +150,8 @@ export function App({ config }: { config: PublicConfig }) {
 		ready: privyReady,
 		user,
 	} = usePrivy();
-	const { ready: solanaWalletsReady, wallets: solanaWallets } = useSolanaWallets();
+	const { ready: solanaWalletsReady, wallets: solanaWallets } =
+		useSolanaWallets();
 	const [view, setView] = useState<View>(
 		() => primaryViewFromPathname(window.location.pathname) ?? "week",
 	);
@@ -177,8 +188,12 @@ export function App({ config }: { config: PublicConfig }) {
 	const [feedClock, setFeedClock] = useState(() => Date.now());
 	const [refreshingFeed, setRefreshingFeed] = useState(false);
 	const [refreshFeedError, setRefreshFeedError] = useState("");
+	const [fundingReturn, setFundingReturn] =
+		useState<FundingReturn>("open-session");
 	const decisionTimer = useRef<number | undefined>(undefined);
 	const bootstrapRequestId = useRef(0);
+	const browsingWithoutFunding = useRef(false);
+	const lastFundingWallet = useRef("");
 	const warningsByAssetId = useRef(new Map<string, string[]>());
 	const activeChain = preferences?.activeChain ?? "SOLANA";
 	const shellChain = stage === "onboarding" ? onboardingChain : activeChain;
@@ -202,6 +217,11 @@ export function App({ config }: { config: PublicConfig }) {
 		selectedSolanaWallet,
 	);
 	const wallet = selectedSolanaWallet?.address ?? "";
+	const walletFunding = useWalletFunding({
+		wallet,
+		fundingWallet: externalSolanaWallet,
+		ticketSizeUsd: preferences?.ticketSizeUsd ?? 0.1,
+	});
 	const displayWallet = wallet;
 	const walletConnectionRequired = !authenticated || !selectedSolanaWallet;
 	const connectWallet = useCallback(() => {
@@ -227,15 +247,18 @@ export function App({ config }: { config: PublicConfig }) {
 			getWalletChain: () => "SOLANA",
 		});
 		return () => configureApiAuth(undefined);
-	}, [
-		getAccessToken,
-		selectedSolanaWallet?.address,
-		wallet,
-	]);
+	}, [getAccessToken, selectedSolanaWallet?.address, wallet]);
 
 	useEffect(() => {
 		removeLegacyPreferences();
 	}, []);
+
+	useEffect(() => {
+		if (lastFundingWallet.current !== wallet) {
+			browsingWithoutFunding.current = false;
+			lastFundingWallet.current = wallet;
+		}
+	}, [wallet]);
 
 	useEffect(() => {
 		const initialView =
@@ -290,7 +313,10 @@ export function App({ config }: { config: PublicConfig }) {
 	const loadSession = useCallback(
 		async (
 			preferences: OnboardingPreferences,
-			options: { persistPreferences?: boolean } = {},
+			options: {
+				persistPreferences?: boolean;
+				skipFundingCheck?: boolean;
+			} = {},
 		) => {
 			const sessionSolanaWallet = selectedSolanaWallet;
 			const sessionWallet = sessionSolanaWallet?.address;
@@ -314,10 +340,25 @@ export function App({ config }: { config: PublicConfig }) {
 			setLoadMoreError("");
 			setFeedExhausted(false);
 			try {
+				if (authenticated && options.persistPreferences !== false) {
+					await api.savePreferences(preferences);
+				}
+				if (!options.skipFundingCheck) {
+					const funding = await walletFunding.refresh(
+						preferences.ticketSizeUsd,
+					);
+					if (
+						funding &&
+						shouldShowFunding(funding.state, browsingWithoutFunding.current)
+					) {
+						setFundingReturn("open-session");
+						setStage("funding");
+						return;
+					}
+				}
 				const { session: opened, feed: generated } = await openFeedSession({
 					preferences,
-					persistPreferences:
-						authenticated && options.persistPreferences !== false,
+					persistPreferences: false,
 					savePreferences: api.savePreferences,
 					openSession: (plan) =>
 						api.openSession(
@@ -362,6 +403,7 @@ export function App({ config }: { config: PublicConfig }) {
 			authenticated,
 			getAccessToken,
 			selectedSolanaWallet,
+			walletFunding.refresh,
 		],
 	);
 
@@ -472,8 +514,7 @@ export function App({ config }: { config: PublicConfig }) {
 			candidates.find((candidate) => candidate.assetId === assetId),
 		)
 		.filter((candidate): candidate is Candidate => Boolean(candidate));
-	const ticketSizeUsd =
-		feedTicketSizeUsd ?? preferences?.ticketSizeUsd ?? 10;
+	const ticketSizeUsd = feedTicketSizeUsd ?? preferences?.ticketSizeUsd ?? 10;
 	const periodLimitUsd = preferences?.periodLimitUsd ?? 100;
 	const availablePeriodBudgetUsd = Math.max(0, periodLimitUsd - periodUsedUsd);
 	const feedBasketTotalUsd = selected.length * ticketSizeUsd;
@@ -566,7 +607,9 @@ export function App({ config }: { config: PublicConfig }) {
 			setFeedClock(Date.now());
 		} catch (caught) {
 			setRefreshFeedError(
-				caught instanceof Error ? caught.message : "Could not refresh the feed.",
+				caught instanceof Error
+					? caught.message
+					: "Could not refresh the feed.",
 			);
 		} finally {
 			setRefreshingFeed(false);
@@ -676,11 +719,12 @@ export function App({ config }: { config: PublicConfig }) {
 	function removeFeedAsset(assetId: string) {
 		setSelectedIds((ids) => ids.filter((id) => id !== assetId));
 		setRetrySelections((selections) =>
-			selections?.filter((selection) => selection.candidate.assetId !== assetId),
+			selections?.filter(
+				(selection) => selection.candidate.assetId !== assetId,
+			),
 		);
 		setFeedExhausted(false);
 	}
-
 
 	function navigate(target: View) {
 		scrollToTop();
@@ -705,10 +749,7 @@ export function App({ config }: { config: PublicConfig }) {
 	}
 
 	const applyWalletPreferences = useCallback(
-		async (
-			_chain: "SOLANA",
-			solanaWallet?: ConnectedStandardSolanaWallet,
-		) => {
+		async (_chain: "SOLANA", solanaWallet?: ConnectedStandardSolanaWallet) => {
 			if (!preferences) return;
 			if (!solanaWallet) {
 				setError("Connect or create a Solana wallet with Privy first.");
@@ -735,11 +776,23 @@ export function App({ config }: { config: PublicConfig }) {
 			});
 			await loadSession(next);
 		},
-		[
-			getAccessToken,
-			loadSession,
-			preferences,
-		],
+		[getAccessToken, loadSession, preferences],
+	);
+
+	const leaveFunding = useCallback(
+		async (browseWithoutFunding = false) => {
+			if (!preferences) return;
+			if (browseWithoutFunding) browsingWithoutFunding.current = true;
+			if (fundingReturn === "open-session") {
+				await loadSession(preferences, {
+					persistPreferences: false,
+					skipFundingCheck: true,
+				});
+				return;
+			}
+			setStage(fundingReturn);
+		},
+		[fundingReturn, loadSession, preferences],
 	);
 
 	if (stage === "bootstrapping") {
@@ -822,6 +875,32 @@ export function App({ config }: { config: PublicConfig }) {
 						privyReady={privyReady}
 						onChainPreview={setOnboardingChain}
 					/>
+				) : stage === "funding" && preferences ? (
+					<FundingScreen
+						wallet={wallet}
+						state={walletFunding.state ?? "UNFUNDED"}
+						usdcBalance={walletFunding.usdcBalance}
+						solBalance={walletFunding.solBalance}
+						loading={walletFunding.loading}
+						error={walletFunding.error}
+						qrCode={walletFunding.qrCode}
+						fundingWalletAddress={externalSolanaWallet?.address}
+						onCopyAddress={() => void copyWalletAddress(wallet)}
+						onConnectExternalWallet={() =>
+							linkWallet({
+								walletChainType: "solana-only",
+								description: "Connect a funding wallet.",
+							})
+						}
+						onSendUsdc={walletFunding.sendUsdc}
+						onSendSol={walletFunding.sendSol}
+						onRefresh={async () => {
+							const next = await walletFunding.refresh();
+							if (next?.state === "READY") await leaveFunding();
+						}}
+						onContinue={() => void leaveFunding()}
+						onBrowse={() => void leaveFunding(true)}
+					/>
 				) : view === "receipts" ? (
 					<ReceiptScreen
 						record={settlement}
@@ -856,10 +935,19 @@ export function App({ config }: { config: PublicConfig }) {
 								const candidate = snapshots.find(
 									(item) => item.assetId === selection.assetId,
 								);
-								return candidate ? [{ candidate, amountInBaseUnits: selection.amountInBaseUnits }] : [];
+								return candidate
+									? [
+											{
+												candidate,
+												amountInBaseUnits: selection.amountInBaseUnits,
+											},
+										]
+									: [];
 							});
 							if (!next.length) {
-								setError("The failed asset snapshot is unavailable. Build a new basket instead.");
+								setError(
+									"The failed asset snapshot is unavailable. Build a new basket instead.",
+								);
 								return;
 							}
 							setSelectedIds(next.map(({ candidate }) => candidate.assetId));
@@ -942,6 +1030,10 @@ export function App({ config }: { config: PublicConfig }) {
 								void loadSession(preferences);
 							}
 						}}
+						onTopUp={() => {
+							setFundingReturn("review");
+							setStage("funding");
+						}}
 						periodLimitUsd={periodLimitUsd}
 						wallet={wallet}
 						liveExecution={config.executionMode !== "demo"}
@@ -1000,6 +1092,27 @@ export function App({ config }: { config: PublicConfig }) {
 									{refreshFeedError}
 								</div>
 							) : null}
+							{walletFunding.state && walletFunding.state !== "READY" ? (
+								<div className="funding-banner" role="status">
+									<div>
+										<strong>Your wallet needs funding</strong>
+										<span>
+											Add USDC for investments and SOL for network fees before
+											checkout.
+										</span>
+									</div>
+									<button
+										type="button"
+										className="button button-primary"
+										onClick={() => {
+											setFundingReturn("swipe");
+											setStage("funding");
+										}}
+									>
+										Fund wallet
+									</button>
+								</div>
+							) : null}
 							{error ? (
 								<div className="fatal-state">
 									<h2>Session unavailable</h2>
@@ -1038,9 +1151,9 @@ export function App({ config }: { config: PublicConfig }) {
 											stableToken={stableToken}
 											feedback={decisionFeedback}
 											infoOpen={assetInfoOpen}
-										onInfoOpenChange={setAssetInfoOpen}
-										onTicketSizeChange={setFeedTicketSizeUsd}
-										onSwipe={animateDecision}
+											onInfoOpenChange={setAssetInfoOpen}
+											onTicketSizeChange={setFeedTicketSizeUsd}
+											onSwipe={animateDecision}
 										/>
 										<button
 											type="button"
@@ -1099,8 +1212,7 @@ export function App({ config }: { config: PublicConfig }) {
 											onClick={() => animateDecision(true)}
 											disabled={Boolean(decisionFeedback) || !canAddCurrent}
 										>
-											{addCurrentLabel}{" "}
-											<ChevronRight aria-hidden="true" />
+											{addCurrentLabel} <ChevronRight aria-hidden="true" />
 										</button>
 									</div>
 								</>
@@ -1113,7 +1225,10 @@ export function App({ config }: { config: PublicConfig }) {
 								<div className="fatal-state">
 									<h2>Could not load more assets</h2>
 									<p>{loadMoreError}</p>
-									<button type="button" onClick={() => void loadMoreCandidates()}>
+									<button
+										type="button"
+										onClick={() => void loadMoreCandidates()}
+									>
 										Try again
 									</button>
 								</div>

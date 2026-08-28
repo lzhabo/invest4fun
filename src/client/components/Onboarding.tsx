@@ -280,18 +280,25 @@ export function Onboarding({
 						<ChainMark chain="SOLANA" />
 						<span>Solana</span>
 					</div>
-					<button
-						type="button"
-						className="button button-primary onboarding-connect-button"
-						onClick={connect}
-						disabled={busy || !privyReady}
-						aria-label="Connect Solana wallet with Privy"
-						title="Connect Solana wallet with Privy"
-					>
-						{busy
-							? "Waiting…"
-							: "Connect Solana wallet"}
-					</button>
+					{authenticated && preferredSolanaWallet ? (
+						<div className="onboarding-wallet-ready" role="status">
+							<Check />
+							<span>
+								Wallet ready · {shortAddress(preferredSolanaWallet.address)}
+							</span>
+						</div>
+					) : (
+						<button
+							type="button"
+							className="button button-primary onboarding-connect-button"
+							onClick={connect}
+							disabled={busy || !privyReady}
+							aria-label="Connect Solana wallet with Privy"
+							title="Connect Solana wallet with Privy"
+						>
+							{busy ? "Waiting…" : "Connect Solana wallet"}
+						</button>
+					)}
 				</div>
 				<div className="onboarding-points">
 					<p>
@@ -352,25 +359,26 @@ export function Onboarding({
 							<ChainMark chain="SOLANA" />
 							<span>Solana</span>
 						</div>
-						<button
-							type="button"
-							className="button button-primary"
-							onClick={connect}
-							disabled={busy || !privyReady}
-						>
-							{busy
-								? "Waiting…"
-								: authenticated
-									? preferredSolanaWallet
-										? preferredSolanaWallet
-											? "Solana wallet ready"
-											: "Connect Solana wallet"
-										: "Connect Solana wallet"
-									: `Continue with ${
-											"Solana"
-										}`}{" "}
-							<ArrowRight />
-						</button>
+						{authenticated && preferredSolanaWallet ? (
+							<div className="onboarding-wallet-ready" role="status">
+								<Check />
+								<span>Solana wallet ready</span>
+							</div>
+						) : (
+							<button
+								type="button"
+								className="button button-primary"
+								onClick={connect}
+								disabled={busy || !privyReady}
+							>
+								{busy
+									? "Waiting…"
+									: authenticated
+										? "Connect Solana wallet"
+										: `Continue with ${"Solana"}`}{" "}
+								<ArrowRight />
+							</button>
+						)}
 						<button
 							type="button"
 							className="onboarding-text-button"
@@ -736,7 +744,7 @@ function QuestionFlow({
 					<QuestionActions
 						back={() => onStep("assets")}
 						next={onSave}
-						nextLabel="Save plan & connect"
+						nextLabel="Save plan"
 						nextDisabled={!draft.riskDisclosureAccepted}
 					/>
 				</>
@@ -864,8 +872,7 @@ function toCompletedPreferences(
 		executionProvider: draft.executionProvider ?? "JUPITER",
 		activeChain: draft.activeChain,
 		feedRankingProvider:
-			draft.feedRankingProvider ??
-			defaultFeedRankingProvider(),
+			draft.feedRankingProvider ?? defaultFeedRankingProvider(),
 		cadence: draft.cadence,
 		periodLimitUsd: draft.periodLimitUsd,
 		ticketSizeUsd: draft.ticketSizeUsd,
@@ -880,8 +887,7 @@ function toPreviewPreferences(draft: PreferenceDraft): OnboardingPreferences {
 		executionProvider: draft.executionProvider ?? "JUPITER",
 		activeChain: draft.activeChain,
 		feedRankingProvider:
-			draft.feedRankingProvider ??
-			defaultFeedRankingProvider(),
+			draft.feedRankingProvider ?? defaultFeedRankingProvider(),
 		cadence: draft.cadence ?? "weekly",
 		periodLimitUsd: draft.periodLimitUsd ?? 100,
 		ticketSizeUsd: draft.ticketSizeUsd ?? 10,
@@ -907,6 +913,11 @@ function customPeriodLimit(value: string): number | undefined {
 	return isPeriodLimitUsd(rounded) ? rounded : undefined;
 }
 
+function shortAddress(address: string) {
+	return address.length > 12
+		? `${address.slice(0, 5)}…${address.slice(-5)}`
+		: address;
+}
 
 function cadenceLabel(cadence: OnboardingPreferences["cadence"]) {
 	if (cadence === "daily") return "Every day";
