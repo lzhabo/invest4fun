@@ -54,6 +54,7 @@ import {
 	SOLANA_USDC_DECIMALS,
 	SOLANA_USDC_MINT,
 	solanaAssetById,
+	solanaAssetIconUrl,
 } from "../domain/solana.js";
 import { CONTENT_SECURITY_POLICY_DIRECTIVES } from "../security-headers.js";
 import type {
@@ -524,11 +525,21 @@ export function createApp(deps: AppDependencies) {
 					const stablecoin =
 						mint === SOLANA_USDC_MINT ? SOLANA_USDC_ASSET : undefined;
 					const persisted = persistedByMint.get(mint);
+					const symbol =
+						known?.symbol ??
+						stablecoin?.symbol ??
+						persisted?.symbol ??
+						token.tokenMetadata?.symbol ??
+						"TOKEN";
 					const balanceBaseUnits = hexBalanceToDecimal(token.tokenBalance);
 					const usdPrice = token.tokenPrices?.find(
 						(price) => price.currency.toLowerCase() === "usd",
 					);
 					const iconUrls = [
+						solanaAssetIconUrl(
+							symbol,
+							persisted?.iconUrl ?? token.tokenMetadata?.logo ?? undefined,
+						),
 						persisted?.iconUrl,
 						token.tokenMetadata?.logo,
 					].filter(
@@ -542,12 +553,7 @@ export function createApp(deps: AppDependencies) {
 							persisted?.assetId ??
 							`sol:mainnet:${mint}`,
 						mint,
-						symbol:
-							known?.symbol ??
-							stablecoin?.symbol ??
-							persisted?.symbol ??
-							token.tokenMetadata?.symbol ??
-							"TOKEN",
+						symbol,
 						name:
 							known?.name ??
 							stablecoin?.name ??

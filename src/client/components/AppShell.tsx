@@ -5,7 +5,12 @@ import {
 	GalleryVerticalEnd,
 	Wallet,
 } from "lucide-react";
-import { type MouseEvent, type ReactNode, useState } from "react";
+import {
+	type CSSProperties,
+	type MouseEvent,
+	type ReactNode,
+	useState,
+} from "react";
 import { type PrimaryView, pathForPrimaryView } from "../view-routing";
 import { WalletMenu } from "./WalletMenu";
 
@@ -34,7 +39,15 @@ export function PrimaryNav({
 	} | null>(null);
 
 	return (
-		<nav className={className} aria-label="Primary navigation">
+		<nav
+			className={className}
+			aria-label="Primary navigation"
+			style={
+				{
+					"--primary-nav-count": PRIMARY_NAV_ITEMS.length,
+				} as CSSProperties
+			}
+		>
 			{PRIMARY_NAV_ITEMS.map(({ id, label, Icon }) => {
 				const isBouncing = symbolEffect?.id === id;
 

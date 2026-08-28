@@ -38,7 +38,6 @@ import { feedBasketSelections } from "./basket-selections";
 import { chartPrefetchRequests } from "./chart-loading-policy";
 import { AccountScreen } from "./components/AccountScreen";
 import { AppShell } from "./components/AppShell";
-import { AssetIconProvider } from "./components/AssetMark";
 import { BudgetRail } from "./components/BudgetRail";
 import { FeedCardSkeleton } from "./components/FeedCardSkeleton";
 import { FundingNotifications } from "./components/FundingNotifications";
@@ -330,6 +329,7 @@ export function App({
 			options: {
 				persistPreferences?: boolean;
 				skipFundingCheck?: boolean;
+				accountState?: "new" | "returning";
 			} = {},
 		) => {
 			const sessionSolanaWallet = selectedSolanaWallet;
@@ -365,7 +365,10 @@ export function App({
 					);
 					if (
 						fundingCheck.status === "resolved" &&
-						shouldShowFunding(fundingCheck.value.state)
+						shouldShowFunding(
+							fundingCheck.value.state,
+							options.accountState ?? "returning",
+						)
 					) {
 						setFundingReturn("open-session");
 						setFundingActive(true);
@@ -454,7 +457,10 @@ export function App({
 		}
 		if (result.state === "returning") {
 			writeAccountPreferences(user.id, result.preferences);
-			await loadSession(result.preferences, { persistPreferences: false });
+			await loadSession(result.preferences, {
+				persistPreferences: false,
+				accountState: "returning",
+			});
 			setPlanNotice("Your saved plan was loaded");
 			return;
 		}
@@ -839,7 +845,11 @@ export function App({
 	}
 
 	return (
-		<AssetIconProvider>
+		<>
+			<FundingNotifications
+				receipts={walletFunding.receipts}
+				onDismiss={walletFunding.dismissReceipt}
+			/>
 			<AppShell
 				active={stage === "review" ? "week" : view}
 				onNavigate={navigate}
@@ -853,10 +863,6 @@ export function App({
 					void applyWalletPreferences("SOLANA", selected);
 				}}
 			>
-				<FundingNotifications
-					receipts={walletFunding.receipts}
-					onDismiss={walletFunding.dismissReceipt}
-				/>
 				{planNotice ? (
 					<div className="app-notice" role="status">
 						{planNotice}
@@ -892,7 +898,9 @@ export function App({
 				) : stage === "onboarding" ? (
 					<Onboarding
 						config={config}
-						onComplete={loadSession}
+						onComplete={(next) =>
+							loadSession(next, { accountState: "new" })
+						}
 						privyReady={privyReady}
 						onChainPreview={() => undefined}
 					/>
@@ -1321,7 +1329,7 @@ export function App({
 					</main>
 				)}
 			</AppShell>
-		</AssetIconProvider>
+		</>
 	);
 }
 

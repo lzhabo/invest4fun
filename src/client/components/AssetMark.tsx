@@ -1,68 +1,25 @@
-import {
-	createContext,
-	type CSSProperties,
-	useContext,
-	useEffect,
-	useState,
-	type ReactNode,
-} from "react";
-import { api } from "../api";
+import { type CSSProperties, useState } from "react";
 
 const CURATED_ICON_URLS: Record<string, string> = {
 	"sol:mainnet:SOL": "/assets/chains/solana.svg",
+	"sol:mainnet:USDC": "/assets/topup/usdc.svg",
 	"sol:mainnet:cbbtcf3aa214zXHbiAZQwf4122FBYbraNdFqgw4iMij":
 		"/assets/tokens/cbbtc.svg",
 };
-const AssetIconsContext = createContext<Record<string, string>>({});
-
-export function AssetIconProvider({ children }: { children: ReactNode }) {
-	const [icons, setIcons] = useState<Record<string, string>>({});
-
-	useEffect(() => {
-		let mounted = true;
-		api
-			.assetIcons()
-			.then(({ icons: next }) => {
-				if (!mounted) return;
-				setIcons(
-					Object.fromEntries(
-						Object.entries(next).map(([key, value]) => [
-							key.toUpperCase(),
-							value,
-						]),
-					),
-				);
-			})
-			.catch(() => undefined);
-		return () => {
-			mounted = false;
-		};
-	}, []);
-
-	return (
-		<AssetIconsContext.Provider value={icons}>
-			{children}
-		</AssetIconsContext.Provider>
-	);
-}
-
 export function assetLogoSources({
 	assetId,
 	iconUrl,
 	iconUrls = [],
-	registeredIconUrl,
 }: {
 	assetId?: string;
 	symbol: string;
 	iconUrl?: string;
 	iconUrls?: string[];
-	registeredIconUrl?: string;
 }): string[] {
 	return [
 		assetId ? CURATED_ICON_URLS[assetId] : undefined,
 		...expandIconSource(iconUrl),
 		...iconUrls.flatMap((source) => expandIconSource(source)),
-		...expandIconSource(registeredIconUrl),
 	].filter(
 		(source, index, sources): source is string =>
 			Boolean(source) && sources.indexOf(source) === index,
@@ -91,14 +48,6 @@ function AssetLogo({
 	const [sourceIndex, setSourceIndex] = useState(0);
 
 	const imageUrl = sources[sourceIndex];
-	useEffect(() => {
-		if (!imageUrl) return;
-		const timer = window.setTimeout(
-			() => setSourceIndex((index) => index + 1),
-			3_000,
-		);
-		return () => window.clearTimeout(timer);
-	}, [imageUrl]);
 	if (!imageUrl) {
 		const fallback = symbol.match(/[a-z0-9]/i)?.[0]?.toUpperCase() ?? "•";
 		const style = {
@@ -157,14 +106,12 @@ export function AssetMark({
 	size?: "sm" | "md" | "lg";
 	decorative?: boolean;
 }) {
-	const registeredIconUrl = useContext(AssetIconsContext)[symbol.toUpperCase()];
 	const identity = assetId ?? `symbol:${symbol.toUpperCase()}`;
 	const sources = assetLogoSources({
 		assetId,
 		symbol,
 		iconUrl,
 		iconUrls,
-		registeredIconUrl,
 	});
 
 	return (
@@ -173,7 +120,7 @@ export function AssetMark({
 			aria-hidden={decorative || undefined}
 		>
 			<AssetLogo
-				key={`${identity}:${sources.join("|")}`}
+				key={identity}
 				assetId={identity}
 				sources={sources}
 				symbol={symbol}

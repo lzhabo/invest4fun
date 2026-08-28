@@ -28,8 +28,11 @@ export function classifyWalletFunding(
 	return "READY";
 }
 
-export function shouldShowFunding(state: WalletFundingState) {
-	return state !== "READY";
+export function shouldShowFunding(
+	state: WalletFundingState,
+	accountState: "new" | "returning",
+) {
+	return accountState === "new" && state !== "READY";
 }
 
 export function hasReceivedFunds(balance: WalletFundingBalance) {

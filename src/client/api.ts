@@ -121,10 +121,6 @@ export interface PublicConfig {
 	privy: { appId: string };
 }
 
-export interface AssetIconsResponse {
-	icons: Record<string, string>;
-}
-
 export interface AssetHistoryResponse {
 	period: HistoryPeriod;
 	source: "coingecko" | "nasdaq" | "yahoo" | "demo" | "unavailable";
@@ -318,7 +314,6 @@ export const api = {
 			method: "POST",
 			body: JSON.stringify(preferences),
 		}),
-	assetIcons: () => request<AssetIconsResponse>("/api/assets/icons"),
 	assetDetails,
 	assetHistory,
 	solanaBalance: (wallet: string, signal?: AbortSignal) =>

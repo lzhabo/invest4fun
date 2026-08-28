@@ -44,11 +44,14 @@ describe("classifyWalletFunding", () => {
 });
 
 describe("shouldShowFunding", () => {
-	it("does not treat a partial deposit as a funded wallet", () => {
-		expect(shouldShowFunding("UNFUNDED")).toBe(true);
-		expect(shouldShowFunding("NEEDS_USDC")).toBe(true);
-		expect(shouldShowFunding("NEEDS_SOL")).toBe(true);
-		expect(shouldShowFunding("READY")).toBe(false);
+	it("automatically opens funding only for a new account", () => {
+		expect(shouldShowFunding("UNFUNDED", "new")).toBe(true);
+		expect(shouldShowFunding("NEEDS_USDC", "new")).toBe(true);
+		expect(shouldShowFunding("NEEDS_SOL", "new")).toBe(true);
+		expect(shouldShowFunding("READY", "new")).toBe(false);
+		expect(shouldShowFunding("UNFUNDED", "returning")).toBe(false);
+		expect(shouldShowFunding("NEEDS_USDC", "returning")).toBe(false);
+		expect(shouldShowFunding("NEEDS_SOL", "returning")).toBe(false);
 	});
 });
 

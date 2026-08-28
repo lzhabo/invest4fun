@@ -58,4 +58,14 @@ describe("AssetMark accessibility", () => {
 		expect(html).toContain('data-asset-fallback="sol:mainnet:unknown-mint"');
 		expect(html).not.toContain("img.logo.dev");
 	});
+
+	it("uses one stable metadata source list", () => {
+		expect(
+			assetLogoSources({
+				assetId: "sol:mainnet:asset-a",
+				symbol: "ASSET",
+				iconUrl: "https://metadata.example/asset.png",
+			}),
+		).toEqual(["https://metadata.example/asset.png"]);
+	});
 });
