@@ -9,6 +9,7 @@ import type { Candidate } from "../../domain/schemas";
 import { formatTicketSizeUsd } from "../../domain/schemas";
 import type { ExecutionRecord, FeedResponse, WeeklySession } from "../api";
 import { ApiError, api } from "../api";
+import { liveCheckoutUi } from "../live-checkout-ui";
 import { shouldOfferTopUp } from "../wallet-funding";
 import {
 	executionMatchesReviewBasket,
@@ -36,6 +37,7 @@ export function ReviewScreen({
 	periodLimitUsd,
 	wallet,
 	liveExecution,
+	liveBroadcastEnabled,
 	activeChain,
 	solanaWallet,
 }: {
@@ -56,6 +58,7 @@ export function ReviewScreen({
 	periodLimitUsd: number;
 	wallet: string;
 	liveExecution: boolean;
+	liveBroadcastEnabled: boolean;
 	activeChain: "SOLANA";
 	solanaWallet?: ConnectedStandardSolanaWallet;
 }) {
@@ -91,6 +94,10 @@ export function ReviewScreen({
 		),
 	);
 	const stableToken = "USDC";
+	const checkoutUi = liveCheckoutUi({
+		liveExecution,
+		liveBroadcastEnabled,
+	});
 	const basket = useMemo(
 		() => ({
 			sessionId: session.id,
@@ -118,6 +125,10 @@ export function ReviewScreen({
 		activeRecord?.plan.solanaTransactions ??
 		(atomicSolanaTransaction ? [atomicSolanaTransaction] : []);
 	const perLegSolana = Boolean(activeRecord?.plan.solanaTransactions);
+	const signingBlocked =
+		checkoutUi.disabled &&
+		activeRecord?.status === "PREPARED" &&
+		solanaTransactions.length > 0;
 	useEffect(() => {
 		const timer = window.setInterval(() => setNow(Date.now()), 1_000);
 		return () => window.clearInterval(timer);
@@ -360,6 +371,10 @@ export function ReviewScreen({
 	}
 
 	async function confirmLive() {
+		if (signingBlocked) {
+			setError(checkoutUi.warning);
+			return;
+		}
 		const signingBasketKey = basketKey;
 		if (
 			activeRecord?.status !== "PREPARED" ||
@@ -614,6 +629,13 @@ export function ReviewScreen({
 
 			<aside className="policy-rail">
 				<h2>Policy checks</h2>
+				<div
+					className={`live-execution-notice${checkoutUi.disabled ? " is-disabled" : ""}`}
+					role="status"
+				>
+					<strong>{checkoutUi.label}</strong>
+					<span>{checkoutUi.warning}</span>
+				</div>
 				{[
 					{
 						label: "Assets eligible",
@@ -781,7 +803,10 @@ export function ReviewScreen({
 											: settleDemo
 							}
 							disabled={
-								loading || !selected.length || activeRecord.status === "SETTLED"
+								loading ||
+								!selected.length ||
+								activeRecord.status === "SETTLED" ||
+								signingBlocked
 							}
 						>
 							{activeRecord.status === "SETTLED"
@@ -790,11 +815,13 @@ export function ReviewScreen({
 									? phaseLabel(phase)
 									: activeRecord.status === "SUBMITTED"
 										? "Check settlement receipt"
-										: !quotesSafeToSign
-											? "Refresh quotes"
-											: hasExecutableTransaction
-												? `Sign & invest ${formatTicketSizeUsd(total)} ${stableToken}`
-												: "Simulate wallet confirmation"}{" "}
+										: signingBlocked
+											? "Live purchases temporarily unavailable"
+											: !quotesSafeToSign
+												? "Refresh quotes"
+												: hasExecutableTransaction
+													? `Sign & invest ${formatTicketSizeUsd(total)} ${stableToken}`
+													: "Simulate wallet confirmation"}{" "}
 							{loading ? (
 								<LoaderCircle className="button-spinner" />
 							) : activeRecord.status !== "SETTLED" &&

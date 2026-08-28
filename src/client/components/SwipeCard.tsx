@@ -25,11 +25,9 @@ import {
 import {
 	chartDateLabels,
 	chartPriceTicks,
-	HISTORY_PERIOD_SECONDS,
 	HISTORY_PERIODS,
-	historySpanSeconds,
-	isHistoryPeriodAvailable,
 } from "../chart-history";
+import { INITIAL_CHART_PERIOD } from "../chart-loading-policy";
 import { formatChartAxisUsdPrice, formatUsdPrice } from "../price-format";
 import { parseCardAmountInput } from "../card-amount";
 import { AssetMark } from "./AssetMark";
@@ -54,7 +52,11 @@ function randomizedDecorativeIcons(previousSlots: ReadonlySet<number>) {
 	);
 }
 
-export function ChartLoadingDots({ decorated = false }: { decorated?: boolean }) {
+export function ChartLoadingDots({
+	decorated = false,
+}: {
+	decorated?: boolean;
+}) {
 	const [decorativeIcons, setDecorativeIcons] = useState(() =>
 		decorated ? randomizedDecorativeIcons(new Set()) : new Map(),
 	);
@@ -81,7 +83,7 @@ export function ChartLoadingDots({ decorated = false }: { decorated?: boolean })
 				decorated
 					? ({
 							"--loading-breath-duration": `${LOADING_BREATH_MS}ms`,
-						}) as CSSProperties
+						} as CSSProperties)
 					: undefined
 			}
 			aria-hidden="true"
@@ -127,24 +129,11 @@ export function ChartLoading({ label }: { label: string }) {
 const CHART_MORPH_DURATION_MS = 420;
 type DecisionFeedback = "invest" | "skip";
 
-function shortDate(timestamp: number) {
-	return new Intl.DateTimeFormat("en-US", {
-		month: "short",
-		day: "numeric",
-	}).format(new Date(timestamp * 1000));
-}
-
 function shortMonthYear(timestamp: number) {
 	return new Intl.DateTimeFormat("en-US", {
 		month: "short",
 		year: "numeric",
 	}).format(new Date(timestamp * 1000));
-}
-
-function oneMonthAfter(timestamp: number) {
-	const date = new Date(timestamp * 1000);
-	date.setUTCMonth(date.getUTCMonth() + 1);
-	return Math.floor(date.getTime() / 1000);
 }
 
 const CHART_TICK_Y = [5, 12.67, 20.33, 28];
@@ -261,10 +250,8 @@ function PriceSparkline({
 	infoOpen: boolean;
 	onInfoOpenChange: (open: boolean) => void;
 }) {
-	const [period, setPeriod] = useState<HistoryPeriod>("1M");
+	const [period, setPeriod] = useState<HistoryPeriod>(INITIAL_CHART_PERIOD);
 	const [history, setHistory] = useState<AssetHistoryResponse>();
-	const [coverageHistory, setCoverageHistory] =
-		useState<AssetHistoryResponse>();
 	const [retryCount, setRetryCount] = useState(0);
 	const [details, setDetails] = useState<AssetDetailsResponse>();
 	const [detailsFailed, setDetailsFailed] = useState(false);
@@ -280,33 +267,6 @@ function PriceSparkline({
 			active = false;
 		};
 	}, [candidate.assetId, details, detailsFailed, infoOpen]);
-
-	useEffect(() => {
-		let active = true;
-		setCoverageHistory(undefined);
-		void api
-			.assetHistory(candidate.assetId, "ALL", retryCount > 0)
-			.then((result) => active && setCoverageHistory(result))
-			.catch(
-				() =>
-					active &&
-					setCoverageHistory({
-						period: "ALL",
-						source: "unavailable",
-						points: [],
-					}),
-			);
-		return () => {
-			active = false;
-		};
-	}, [candidate.assetId, retryCount]);
-
-	useEffect(() => {
-		if (!coverageHistory) return;
-		setPeriod((current) =>
-			isHistoryPeriodAvailable(current, coverageHistory) ? current : "ALL",
-		);
-	}, [coverageHistory]);
 
 	useEffect(() => {
 		let active = true;
@@ -335,15 +295,6 @@ function PriceSparkline({
 	const last = prices.at(-1);
 	const change = first && last ? ((last - first) / first) * 100 : 0;
 	const dateLabels = chartDateLabels(history);
-	const coverageSpan = historySpanSeconds(coverageHistory);
-	const coverageDays = Math.max(1, Math.round(coverageSpan / (24 * 60 * 60)));
-	const isNewToken =
-		coverageHistory?.source === "coingecko" &&
-		coverageSpan < HISTORY_PERIOD_SECONDS["1M"];
-	const firstTimestamp = coverageHistory?.points[0]?.timestamp;
-	const oneMonthUnlock = firstTimestamp
-		? oneMonthAfter(firstTimestamp)
-		: undefined;
 	const displayPeriod = history?.period ?? period;
 	const periodLabel =
 		displayPeriod === "ALL" && history?.points[0]
@@ -374,19 +325,13 @@ function PriceSparkline({
 		<div
 			className={`price-chart${change < 0 ? " is-down" : ""}${infoOpen ? " has-info" : ""}`}
 		>
-			<div className={`chart-meta${isNewToken ? " has-coverage" : ""}`}>
+			<div className="chart-meta">
 				<strong>{formatUsdPrice(candidate.marketPriceUsd ?? 0)}</strong>
 				<span>
 					{prices.length
 						? `${change >= 0 ? "+" : ""}${change.toFixed(2)}% · ${periodLabel}`
 						: "—"}
 				</span>
-				{isNewToken ? (
-					<div className="chart-coverage">
-						<i aria-hidden="true" />
-						New · {coverageDays} {coverageDays === 1 ? "day" : "days"}
-					</div>
-				) : null}
 			</div>
 			{unavailable ? (
 				<div className="chart-unavailable" role="status">
@@ -438,17 +383,11 @@ function PriceSparkline({
 				>
 					<legend className="sr-only">Chart timeframe</legend>
 					{HISTORY_PERIODS.map((option) => {
-						const disabled = !isHistoryPeriodAvailable(option, coverageHistory);
-						const unlockLabel =
-							option === "1M" && oneMonthUnlock
-								? ` Available ${shortDate(oneMonthUnlock)}.`
-								: "";
 						return (
 							<button
 								type="button"
 								aria-pressed={period === option}
-								aria-label={`${option === "ALL" ? "All" : option} timeframe.${disabled ? ` Not enough price history.${unlockLabel}` : ""}`}
-								disabled={disabled}
+								aria-label={`${option === "ALL" ? "All" : option} timeframe.`}
 								onClick={() => setPeriod(option)}
 								key={option}
 							>
@@ -582,14 +521,6 @@ function PriceSparkline({
 					) : null}
 				</div>
 			) : null}
-			{isNewToken ? (
-				<div className="chart-coverage-note">
-					<span>Only {coverageDays} days of history</span>
-					{oneMonthUnlock ? (
-						<span>1M available {shortDate(oneMonthUnlock)}</span>
-					) : null}
-				</div>
-			) : null}
 		</div>
 	);
 }
@@ -694,10 +625,10 @@ export function SwipeCard({
 					<AssetMark
 						assetId={candidate.assetId}
 						symbol={candidate.symbol}
-					iconUrl={candidate.iconUrl}
-					size="lg"
-					decorative
-				/>
+						iconUrl={candidate.iconUrl}
+						size="lg"
+						decorative
+					/>
 					<div>
 						<h2>{candidate.symbol}</h2>
 						<p>{candidate.name}</p>

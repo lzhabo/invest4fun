@@ -74,4 +74,26 @@ describe("FundingScreen", () => {
 		expect(html).toContain("Add SOL for network fees");
 		expect(html).toContain("Send SOL");
 	});
+
+	it("lets the user continue after receiving any positive amount", () => {
+		const html = renderToStaticMarkup(
+			<FundingScreen
+				wallet={wallet}
+				state="NEEDS_USDC"
+				fundsReceived
+				usdcBalance="0.01"
+				solBalance="0"
+				loading={false}
+				onCopyAddress={() => {}}
+				onConnectExternalWallet={() => {}}
+				onRefresh={() => {}}
+				onContinue={() => {}}
+				onBrowse={() => {}}
+			/>,
+		);
+
+		expect(html).toContain("Funds received");
+		expect(html).toContain("Continue to feed");
+		expect(html).not.toContain("Wallet ready");
+	});
 });

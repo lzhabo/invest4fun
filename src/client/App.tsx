@@ -33,7 +33,9 @@ import {
 	type WeeklySession,
 } from "./api";
 import { resolveAccountBootstrap } from "./account-bootstrap";
+import { resolveAppEntryView, type AppEntryStage } from "./app-entry-route";
 import { feedBasketSelections } from "./basket-selections";
+import { chartPrefetchRequests } from "./chart-loading-policy";
 import { AccountScreen } from "./components/AccountScreen";
 import { AppShell } from "./components/AppShell";
 import { AssetIconProvider } from "./components/AssetMark";
@@ -48,6 +50,7 @@ import { ReceiptScreen } from "./components/ReceiptScreen";
 import { ReviewScreen } from "./components/ReviewScreen";
 import { SwipeCard } from "./components/SwipeCard";
 import { openFeedSession } from "./feed-session";
+import { checkFundingWithin } from "./funding-check";
 import { mergeRefreshedFeed } from "./feed-refresh";
 import {
 	readAccountPreferences,
@@ -59,7 +62,7 @@ import {
 	findExternalSolanaWallet,
 } from "./solana-wallet-selection";
 import { copyWalletAddress, useWalletFunding } from "./use-wallet-funding";
-import { shouldShowFunding } from "./wallet-funding";
+import { hasReceivedFunds, shouldShowFunding } from "./wallet-funding";
 import {
 	readThemeSettings,
 	type AppTheme,
@@ -72,13 +75,7 @@ import {
 } from "./view-routing";
 
 type View = PrimaryView | "receipts";
-type Stage =
-	| "bootstrapping"
-	| "loading"
-	| "onboarding"
-	| "funding"
-	| "swipe"
-	| "review";
+type Stage = AppEntryStage;
 type FundingReturn = "open-session" | "swipe" | "review";
 type DecisionFeedback = "invest" | "skip";
 const LAST_EXECUTION_KEY = "investmade:last-execution";
@@ -188,6 +185,7 @@ export function App({ config }: { config: PublicConfig }) {
 	const [feedClock, setFeedClock] = useState(() => Date.now());
 	const [refreshingFeed, setRefreshingFeed] = useState(false);
 	const [refreshFeedError, setRefreshFeedError] = useState("");
+	const [planNotice, setPlanNotice] = useState("");
 	const [fundingReturn, setFundingReturn] =
 		useState<FundingReturn>("open-session");
 	const decisionTimer = useRef<number | undefined>(undefined);
@@ -223,7 +221,12 @@ export function App({ config }: { config: PublicConfig }) {
 		ticketSizeUsd: preferences?.ticketSizeUsd ?? 0.1,
 	});
 	const displayWallet = wallet;
-	const walletConnectionRequired = !authenticated || !selectedSolanaWallet;
+	const entryView = resolveAppEntryView({
+		stage,
+		authenticated,
+		hasEmbeddedWallet: Boolean(selectedSolanaWallet),
+		hasFeed: Boolean(feed),
+	});
 	const connectWallet = useCallback(() => {
 		if (!privyReady) return;
 		if (!authenticated) {
@@ -259,6 +262,12 @@ export function App({ config }: { config: PublicConfig }) {
 			lastFundingWallet.current = wallet;
 		}
 	}, [wallet]);
+
+	useEffect(() => {
+		if (!planNotice) return;
+		const timer = window.setTimeout(() => setPlanNotice(""), 3_000);
+		return () => window.clearTimeout(timer);
+	}, [planNotice]);
 
 	useEffect(() => {
 		const initialView =
@@ -344,12 +353,18 @@ export function App({ config }: { config: PublicConfig }) {
 					await api.savePreferences(preferences);
 				}
 				if (!options.skipFundingCheck) {
-					const funding = await walletFunding.refresh(
-						preferences.ticketSizeUsd,
+					const fundingCheck = await checkFundingWithin(
+						(signal) =>
+							walletFunding.refresh(preferences.ticketSizeUsd, signal),
+						5_000,
 					);
 					if (
-						funding &&
-						shouldShowFunding(funding.state, browsingWithoutFunding.current)
+						fundingCheck.status === "resolved" &&
+						shouldShowFunding(
+							fundingCheck.value.state,
+							browsingWithoutFunding.current,
+							hasReceivedFunds(fundingCheck.value.balance),
+						)
 					) {
 						setFundingReturn("open-session");
 						setStage("funding");
@@ -431,12 +446,14 @@ export function App({ config }: { config: PublicConfig }) {
 		});
 		if (bootstrapRequestId.current !== requestId) return;
 		if (result.state === "new") {
+			setPlanNotice("");
 			setStage("onboarding");
 			return;
 		}
 		if (result.state === "returning") {
 			writeAccountPreferences(user.id, result.preferences);
 			await loadSession(result.preferences, { persistPreferences: false });
+			setPlanNotice("Your saved plan was loaded");
 			return;
 		}
 		setBootstrapIssue({
@@ -544,12 +561,15 @@ export function App({ config }: { config: PublicConfig }) {
 	}, [feedUpdatedAt]);
 
 	useEffect(() => {
-		if (!nextAssetId) return;
-		void Promise.all([
-			api.assetHistory(nextAssetId, "ALL"),
-			api.assetHistory(nextAssetId, "1M"),
-		]).catch(() => undefined);
-	}, [nextAssetId]);
+		for (const request of chartPrefetchRequests({
+			visibleAssetId: current?.assetId,
+			nextAssetId,
+		})) {
+			void api
+				.assetHistory(request.assetId, request.period)
+				.catch(() => undefined);
+		}
+	}, [current?.assetId, nextAssetId]);
 
 	const recoverReviewSession = useCallback(async () => {
 		if (!preferences) throw new Error("PREFERENCES_REQUIRED");
@@ -691,13 +711,6 @@ export function App({ config }: { config: PublicConfig }) {
 		loadingMore,
 	]);
 
-	useEffect(() => {
-		const nextCandidate = candidates[index + 1];
-		if (!nextCandidate) return;
-		// One default-range prefetch per visible card stays within CoinGecko Demo limits.
-		void api.assetHistory(nextCandidate.assetId, "1M").catch(() => undefined);
-	}, [candidates, index]);
-
 	function decide(add: boolean) {
 		if (!current) return;
 		if (add && !selectedIds.includes(current.assetId) && canAddCurrent) {
@@ -795,7 +808,7 @@ export function App({ config }: { config: PublicConfig }) {
 		[fundingReturn, loadSession, preferences],
 	);
 
-	if (stage === "bootstrapping") {
+	if (entryView === "SKELETON") {
 		if (!bootstrapIssue) return <AppBootstrapSkeleton />;
 		return (
 			<main className="fatal-state account-bootstrap-error">
@@ -841,7 +854,12 @@ export function App({ config }: { config: PublicConfig }) {
 					void applyWalletPreferences("SOLANA", selected);
 				}}
 			>
-				{walletConnectionRequired ? (
+				{planNotice ? (
+					<div className="app-notice" role="status">
+						{planNotice}
+					</div>
+				) : null}
+				{entryView === "WALLET_REQUIRED" ? (
 					<main className="swipe-page">
 						<section className="swipe-workspace">
 							<header className="page-heading">
@@ -879,6 +897,7 @@ export function App({ config }: { config: PublicConfig }) {
 					<FundingScreen
 						wallet={wallet}
 						state={walletFunding.state ?? "UNFUNDED"}
+						fundsReceived={walletFunding.fundsReceived}
 						usdcBalance={walletFunding.usdcBalance}
 						solBalance={walletFunding.solBalance}
 						loading={walletFunding.loading}
@@ -894,10 +913,7 @@ export function App({ config }: { config: PublicConfig }) {
 						}
 						onSendUsdc={walletFunding.sendUsdc}
 						onSendSol={walletFunding.sendSol}
-						onRefresh={async () => {
-							const next = await walletFunding.refresh();
-							if (next?.state === "READY") await leaveFunding();
-						}}
+						onRefresh={() => walletFunding.refresh()}
 						onContinue={() => void leaveFunding()}
 						onBrowse={() => void leaveFunding(true)}
 					/>
@@ -1037,6 +1053,7 @@ export function App({ config }: { config: PublicConfig }) {
 						periodLimitUsd={periodLimitUsd}
 						wallet={wallet}
 						liveExecution={config.executionMode !== "demo"}
+						liveBroadcastEnabled={config.liveBroadcastEnabled}
 						activeChain="SOLANA"
 						solanaWallet={selectedSolanaWallet}
 						onExecutionChange={(record) => {
@@ -1110,6 +1127,21 @@ export function App({ config }: { config: PublicConfig }) {
 										}}
 									>
 										Fund wallet
+									</button>
+								</div>
+							) : walletFunding.error ? (
+								<div className="funding-banner is-error" role="status">
+									<div>
+										<strong>Could not check wallet balance</strong>
+										<span>Retry the balance check before checkout.</span>
+									</div>
+									<button
+										type="button"
+										className="button button-outline"
+										onClick={() => void walletFunding.refresh()}
+										disabled={walletFunding.loading}
+									>
+										{walletFunding.loading ? "Checking…" : "Retry"}
 									</button>
 								</div>
 							) : null}

@@ -3,7 +3,7 @@ import {
 	useSignAndSendTransaction,
 } from "@privy-io/react-auth/solana";
 import { toDataURL } from "qrcode";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { formatUnits } from "viem";
 import { SOLANA_USDC_MINT } from "../domain/solana";
 import { api, type SolanaBalanceResponse } from "./api";
@@ -13,6 +13,7 @@ import {
 } from "./funding-transactions";
 import {
 	classifyWalletFunding,
+	hasReceivedFunds,
 	type WalletFundingState,
 } from "./wallet-funding";
 
@@ -31,14 +32,15 @@ export function useWalletFunding({
 	const [loading, setLoading] = useState(Boolean(wallet));
 	const [error, setError] = useState("");
 	const [qrCode, setQrCode] = useState("");
+	const lastWallet = useRef("");
 
 	const refresh = useCallback(
-		async (requiredTicketSizeUsd = ticketSizeUsd) => {
+		async (requiredTicketSizeUsd = ticketSizeUsd, signal?: AbortSignal) => {
 			if (!wallet) return;
 			setLoading(true);
 			setError("");
 			try {
-				const nextBalance = await api.solanaBalance(wallet);
+				const nextBalance = await api.solanaBalance(wallet, signal);
 				const nextState = classifyWalletFunding({
 					...nextBalance,
 					ticketSizeUsd: requiredTicketSizeUsd,
@@ -48,9 +50,11 @@ export function useWalletFunding({
 				return { balance: nextBalance, state: nextState };
 			} catch (caught) {
 				setError(
-					caught instanceof Error
-						? caught.message
-						: "Could not read wallet balances.",
+					signal?.aborted
+						? "Could not check wallet balance."
+						: caught instanceof Error
+							? caught.message
+							: "Could not read wallet balances.",
 				);
 			} finally {
 				setLoading(false);
@@ -60,11 +64,13 @@ export function useWalletFunding({
 	);
 
 	useEffect(() => {
-		setBalance(undefined);
-		setState(undefined);
-		setError("");
-		if (wallet) void refresh();
-	}, [refresh, wallet]);
+		if (lastWallet.current !== wallet) {
+			lastWallet.current = wallet;
+			setBalance(undefined);
+			setState(undefined);
+			setError("");
+		}
+	}, [wallet]);
 
 	useEffect(() => {
 		if (!wallet) {
@@ -130,6 +136,7 @@ export function useWalletFunding({
 		solBalance: balance
 			? formatUnits(BigInt(balance.solBalanceLamports), 9)
 			: "0",
+		fundsReceived: balance ? hasReceivedFunds(balance) : false,
 		refresh,
 		sendUsdc: (amount: number) => send("USDC", amount),
 		sendSol: (amount: number) => send("SOL", amount),

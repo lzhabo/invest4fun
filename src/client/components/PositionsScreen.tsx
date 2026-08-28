@@ -129,7 +129,10 @@ export function PositionsScreen({
 			<header className="positions-heading">
 				<div>
 					<h1>Portfolio</h1>
-					<p>Read-only wallet balances from Alchemy. USD prices are shown when available.</p>
+					<p>
+						Read-only wallet balances from Alchemy. USD prices are shown when
+						available.
+					</p>
 				</div>
 			</header>
 			<section className="portfolio-summary">
@@ -164,7 +167,9 @@ export function PositionsScreen({
 			) : holdings.length === 0 ? (
 				<div className="positions-empty" role="status" aria-live="polite">
 					<strong>No positions yet</strong>
-					<span>This wallet has no positive Solana token balances to show.</span>
+					<span>
+						This wallet has no positive Solana token balances to show.
+					</span>
 				</div>
 			) : (
 				<section className="positions-list">
@@ -194,13 +199,26 @@ export function PositionsScreen({
 								/>
 								<div className="position-copy">
 									<div className="position-primary">
-										<b>{candidate.name}</b>
+										{portfolioExplorerUrl(candidate.contract) ? (
+											<a
+												href={portfolioExplorerUrl(candidate.contract)}
+												target="_blank"
+												rel="noopener noreferrer"
+											>
+												{candidate.name} ↗
+											</a>
+										) : (
+											<b>{candidate.name}</b>
+										)}
 										<b>{holdingValue}</b>
 									</div>
 									<div className="position-secondary">
 										<small>{unitPrice}</small>
 										<small>
-											{formatPositionBalance(BigInt(rawBalance), candidate.decimals)}{" "}
+											{formatPositionBalance(
+												BigInt(rawBalance),
+												candidate.decimals,
+											)}{" "}
 											{candidate.symbol}
 										</small>
 									</div>
@@ -229,4 +247,8 @@ function formatPositionBalance(value: bigint, decimals: number) {
 			: 4;
 	const compactFraction = fraction.slice(0, visibleDecimals).replace(/0+$/, "");
 	return compactFraction ? `${whole}.${compactFraction}` : whole;
+}
+
+function portfolioExplorerUrl(mint: string) {
+	return mint ? `https://solscan.io/token/${encodeURIComponent(mint)}` : "";
 }

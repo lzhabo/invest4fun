@@ -12,7 +12,6 @@ import {
 	ListOrdered,
 	Moon,
 	PiggyBank,
-	RefreshCw,
 	Scale,
 	Sun,
 	Tag,
@@ -41,6 +40,7 @@ import {
 } from "../funding-transactions";
 import type { AppTheme } from "../theme-settings";
 import { AccountBalanceSkeleton } from "./PageSkeletons";
+import { FundingPanel } from "./FundingPanel";
 
 const CADENCE_OPTIONS = ["daily", "weekly", "monthly"] as const;
 const RISK_OPTIONS = ["conservative", "balanced", "degen"] as const;
@@ -81,11 +81,6 @@ export function AccountScreen({
 	const [solanaTopUpOpen, setSolanaTopUpOpen] = useState(false);
 	const [addressCopied, setAddressCopied] = useState<"smart" | "funding">();
 	const [depositQrCode, setDepositQrCode] = useState("");
-	const [usdcFundingAmount, setUsdcFundingAmount] = useState("10");
-	const [solFundingAmount, setSolFundingAmount] = useState("0.01");
-	const [fundingAction, setFundingAction] = useState<"USDC" | "SOL">();
-	const [fundingStatus, setFundingStatus] = useState("");
-	const [fundingError, setFundingError] = useState("");
 
 	useEffect(() => setDraft(preferences), [preferences]);
 	useEffect(() => setThemeDraft(theme), [theme]);
@@ -105,7 +100,9 @@ export function AccountScreen({
 			setSolPriceUsd(nextSolPriceUsd);
 		} catch (caught) {
 			setBalanceError(
-				caught instanceof Error ? caught.message : "Could not read USDC balance.",
+				caught instanceof Error
+					? caught.message
+					: "Could not read USDC balance.",
 			);
 		}
 	}, [wallet]);
@@ -137,9 +134,11 @@ export function AccountScreen({
 			return;
 		}
 		let cancelled = false;
-		void toDataURL(`solana:${wallet}`, { margin: 1, width: 184 }).then((url) => {
-			if (!cancelled) setDepositQrCode(url);
-		});
+		void toDataURL(`solana:${wallet}`, { margin: 1, width: 184 }).then(
+			(url) => {
+				if (!cancelled) setDepositQrCode(url);
+			},
+		);
 		return () => {
 			cancelled = true;
 		};
@@ -189,65 +188,42 @@ export function AccountScreen({
 
 	function topUp() {
 		if (!wallet) return;
-		setFundingError("");
-		setFundingStatus("");
 		setSolanaTopUpOpen(true);
 	}
 
-	async function fundFromExternalWallet(asset: "USDC" | "SOL") {
+	async function fundFromExternalWallet(asset: "USDC" | "SOL", amount: number) {
 		if (!fundingWallet) {
 			onConnectExternalWallet();
 			return;
 		}
-		const amount = Number(
-			asset === "USDC" ? usdcFundingAmount : solFundingAmount,
-		);
-		if (!Number.isFinite(amount) || amount <= 0) {
-			setFundingError(`Enter a valid ${asset} amount.`);
-			return;
-		}
-		setFundingAction(asset);
-		setFundingError("");
-		setFundingStatus("");
-		try {
-			const blockhash = await api.solanaLatestBlockhash();
-			const transaction =
-				asset === "USDC"
-					? buildUsdcFundingTransaction({
-							from: fundingWallet.address,
-							to: wallet,
-							usdcAmount: amount,
-							blockhash,
-							mint: SOLANA_USDC_MINT,
-						})
-					: buildSolFundingTransaction({
-							from: fundingWallet.address,
-							to: wallet,
-							solAmount: amount,
-							blockhash,
-						});
-			await signAndSendTransaction({
-				transaction,
-				wallet: fundingWallet,
-				chain: "solana:mainnet",
-				options: {
-					uiOptions: {
-						description: `Transfer ${amount} ${asset} to your Invest4.fun wallet.`,
-						buttonText: `Send ${asset}`,
-					},
+		const blockhash = await api.solanaLatestBlockhash();
+		const transaction =
+			asset === "USDC"
+				? buildUsdcFundingTransaction({
+						from: fundingWallet.address,
+						to: wallet,
+						usdcAmount: amount,
+						blockhash,
+						mint: SOLANA_USDC_MINT,
+					})
+				: buildSolFundingTransaction({
+						from: fundingWallet.address,
+						to: wallet,
+						solAmount: amount,
+						blockhash,
+					});
+		await signAndSendTransaction({
+			transaction,
+			wallet: fundingWallet,
+			chain: "solana:mainnet",
+			options: {
+				uiOptions: {
+					description: `Transfer ${amount} ${asset} to your Invest4.fun wallet.`,
+					buttonText: `Send ${asset}`,
 				},
-			});
-			setFundingStatus(
-				`${asset} transfer submitted. Balance will update after confirmation.`,
-			);
-			await refreshBalance();
-		} catch (caught) {
-			setFundingError(
-				caught instanceof Error ? caught.message : `${asset} transfer failed.`,
-			);
-		} finally {
-			setFundingAction(undefined);
-		}
+			},
+		});
+		await refreshBalance();
 	}
 
 	function closeSettings(open: boolean) {
@@ -303,8 +279,8 @@ export function AccountScreen({
 							{formatAccountBalance(solBalance)} SOL
 							{solPriceUsd === undefined
 								? ""
-								: ` (${formatUsdValue(Number(solBalance) * solPriceUsd)})`} available
-							for fees
+								: ` (${formatUsdValue(Number(solBalance) * solPriceUsd)})`}{" "}
+							available for fees
 						</small>
 					) : null}
 				</div>
@@ -351,9 +327,10 @@ export function AccountScreen({
 						<div className="send-dialog-header">
 							<div>
 								<span className="account-label">Solana wallet</span>
-								<Dialog.Title>Top up USDC</Dialog.Title>
+								<Dialog.Title>Fund your wallet</Dialog.Title>
 								<Dialog.Description>
-									Choose how to deposit USDC into your Invest4.fun wallet.
+									Choose how to deposit USDC and SOL into your Invest4.fun
+									wallet.
 								</Dialog.Description>
 							</div>
 							<Dialog.Close asChild>
@@ -366,140 +343,26 @@ export function AccountScreen({
 								</button>
 							</Dialog.Close>
 						</div>
-						<div className="account-top-up-providers">
-							<section className="account-top-up-provider">
-								<div className="account-top-up-provider-heading">
-									<span className="account-top-up-provider-icon" aria-hidden="true">
-										<Coins />
-									</span>
-									<div>
-										<strong>Direct transfer</strong>
-										<small>Send USDC directly on Solana.</small>
-									</div>
-								</div>
-								<div className="account-top-up-wallet">
-									{depositQrCode ? (
-										<img
-											className="account-top-up-qr"
-											src={depositQrCode}
-											alt="QR code for the Invest4.fun Solana deposit address"
-										/>
-									) : null}
-									<span>Deposit address</span>
-									<code>{wallet}</code>
-									<button
-										type="button"
-										className="button button-top-up account-top-up-copy"
-										onClick={() => void copyAddress(wallet, "smart")}
-									>
-										{addressCopied === "smart" ? (
-											<>
-												Copied <Check aria-hidden="true" />
-											</>
-										) : (
-											<>
-												Copy address <Copy aria-hidden="true" />
-											</>
-										)}
-									</button>
-								</div>
-							</section>
-							<section className="account-top-up-provider funding-transfer-panel">
-								<div className="account-top-up-provider-heading">
-									<span className="account-top-up-provider-icon" aria-hidden="true">
-										<Wallet />
-									</span>
-									<div>
-										<strong>Transfer from external wallet</strong>
-										<small>
-											{fundingWallet
-												? shortAddress(fundingWallet.address)
-												: "Connect an existing Solana wallet first."}
-										</small>
-									</div>
-								</div>
-								{fundingWallet ? (
-									<div className="funding-transfer-actions">
-										<label>
-											<span>Deposit USDC</span>
-											<input
-												type="number"
-												min="0.1"
-												step="0.01"
-												value={usdcFundingAmount}
-												onChange={(event) => setUsdcFundingAmount(event.target.value)}
-											/>
-											<button
-												type="button"
-												className="button button-primary"
-												onClick={() => void fundFromExternalWallet("USDC")}
-												disabled={Boolean(fundingAction)}
-											>
-												{fundingAction === "USDC" ? "Sending…" : "Send USDC"}
-											</button>
-										</label>
-										<label>
-											<span>Add SOL for network fees</span>
-											<input
-												type="number"
-												min="0.001"
-												step="0.001"
-												value={solFundingAmount}
-												onChange={(event) => setSolFundingAmount(event.target.value)}
-											/>
-											<button
-												type="button"
-												className="button button-outline"
-												onClick={() => void fundFromExternalWallet("SOL")}
-												disabled={Boolean(fundingAction)}
-											>
-												{fundingAction === "SOL" ? "Sending…" : "Send SOL"}
-											</button>
-										</label>
-									</div>
-								) : (
-									<button
-										type="button"
-										className="button button-outline"
-										onClick={onConnectExternalWallet}
-									>
-										Connect Solana wallet
-									</button>
-								)}
-							</section>
-						</div>
-						<div className="funding-balance-status">
-							<span>
-								{balance === undefined ? "—" : `${formatInvestingBalance(balance)} USDC`}
-							</span>
-							<span>
-								{solBalance === undefined ? "—" : `${formatAccountBalance(solBalance)} SOL`}
-							</span>
-							<button
-								type="button"
-								className="button button-outline"
-								onClick={() => void refreshBalance()}
-							>
-								Refresh balance <RefreshCw aria-hidden="true" />
-							</button>
-						</div>
-						{fundingStatus ? (
-							<p className="funding-status" role="status">
-								{fundingStatus}
-							</p>
-						) : null}
-						{fundingError ? (
-							<p className="error-message" role="alert">
-								{fundingError}
-							</p>
-						) : null}
-						<p className="account-top-up-note">
-							<Info aria-hidden="true" />
-							<span>
-								Only send USDC on Solana to this address. Keep some SOL in the
-								wallet for network fees.
-							</span>
-						</p>
+						<FundingPanel
+							wallet={wallet}
+							qrCode={depositQrCode}
+							usdcBalance={
+								balance === undefined ? "—" : formatInvestingBalance(balance)
+							}
+							solBalance={
+								solBalance === undefined
+									? "—"
+									: (formatAccountBalance(solBalance) ?? "—")
+							}
+							loading={balance === undefined && !balanceError}
+							error={balanceError}
+							fundingWalletAddress={fundingWallet?.address}
+							onCopyAddress={() => copyAddress(wallet, "smart")}
+							onConnectExternalWallet={onConnectExternalWallet}
+							onSendUsdc={(amount) => fundFromExternalWallet("USDC", amount)}
+							onSendSol={(amount) => fundFromExternalWallet("SOL", amount)}
+							onRefresh={refreshBalance}
+						/>
 					</Dialog.Content>
 				</Dialog.Portal>
 			</Dialog.Root>
@@ -517,9 +380,7 @@ export function AccountScreen({
 									<Landmark />
 								</span>
 								<strong>Invest4.fun wallet</strong>
-								<span className="account-network">
-									Solana Mainnet
-								</span>
+								<span className="account-network">Solana Mainnet</span>
 							</div>
 							<small>
 								<CheckCircle2 aria-hidden="true" /> Executes approved
@@ -682,8 +543,7 @@ export function AccountScreen({
 										/>
 									</div>
 									<small>
-									USDC amount
-										from $0.10 to $
+										USDC amount from $0.10 to $
 										{formatTicketSizeUsd(draft.periodLimitUsd ?? 100)}, in $0.01
 										increments.
 									</small>
@@ -854,9 +714,7 @@ export function AccountScreen({
 								<fieldset className="settings-field execution-provider-setting">
 									<legend>Theme</legend>
 									<p>
-										Set the look for{" "}
-										Solana
-										. This does not change networks.
+										Set the look for Solana . This does not change networks.
 									</p>
 									<div className="execution-provider-options theme-palette-options">
 										{(
@@ -864,8 +722,7 @@ export function AccountScreen({
 												{
 													id: "light",
 													name: "Light",
-													description:
-													"Bright surfaces with lime accents.",
+													description: "Bright surfaces with lime accents.",
 												},
 												{
 													id: "dark",
@@ -899,51 +756,47 @@ export function AccountScreen({
 									<p>Choose where Investmade finds and executes your swaps.</p>
 									<div className="execution-provider-options">
 										{(
-													[
-														{
-															id: "JUPITER",
-															name: "Jupiter",
-															description:
-																"Jupiter liquidity and routing on Solana.",
-														},
-													] as const
-												).map((provider) => {
-													const available =
-														executionProviders[provider.id].available;
-													return (
-														<label
-															key={provider.id}
-															className={
-																draft.executionProvider === provider.id
-																	? "selected"
-																	: ""
-															}
-														>
-															<input
-																type="radio"
-																name="execution-provider"
-																checked={
-																	draft.executionProvider === provider.id
-																}
-																disabled={!available}
-																onChange={() =>
-																	setDraft((current) => ({
-																		...current,
-																		executionProvider: provider.id,
-																		solanaExecutionProvider: provider.id,
-																	}))
-																}
-															/>
-															<span>
-																<b>{provider.name}</b>
-																<small>{provider.description}</small>
-																{!available ? (
-																	<em>API not configured</em>
-																) : null}
-															</span>
-														</label>
-													);
-												})}
+											[
+												{
+													id: "JUPITER",
+													name: "Jupiter",
+													description:
+														"Jupiter liquidity and routing on Solana.",
+												},
+											] as const
+										).map((provider) => {
+											const available =
+												executionProviders[provider.id].available;
+											return (
+												<label
+													key={provider.id}
+													className={
+														draft.executionProvider === provider.id
+															? "selected"
+															: ""
+													}
+												>
+													<input
+														type="radio"
+														name="execution-provider"
+														checked={draft.executionProvider === provider.id}
+														disabled={!available}
+														onChange={() =>
+															setDraft((current) => ({
+																...current,
+																executionProvider: provider.id,
+																solanaExecutionProvider: provider.id,
+															}))
+														}
+													/>
+													<span>
+														<b>{provider.name}</b>
+														<small>{provider.description}</small>
+														{!available ? <em>API not configured</em> : null}
+													</span>
+												</label>
+											);
+										})}
 									</div>
 									<small>
 										Changing provider applies to your next basket. Prepared

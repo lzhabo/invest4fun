@@ -77,6 +77,11 @@ import {
 	LivePurchaseSafetyError,
 } from "./live-purchase-safety.js";
 import { reconcileExecution } from "./reconcile-execution.js";
+import {
+	loadPortfolioMetadata,
+	persistPortfolioMetadata,
+	portfolioTokenFallbackName,
+} from "./portfolio-metadata.js";
 import { sessionEpochId } from "./session-epoch.js";
 import type { StateStore } from "./store.js";
 
@@ -182,10 +187,14 @@ export function createApp(deps: AppDependencies) {
 
 	app.get("/api/cron/reconcile", async (request, response) => {
 		if (!deps.config.CRON_SECRET) {
-			response.status(503).json({ error: "RECONCILIATION_CRON_NOT_CONFIGURED" });
+			response
+				.status(503)
+				.json({ error: "RECONCILIATION_CRON_NOT_CONFIGURED" });
 			return;
 		}
-		if (!hasBearerSecret(request.headers.authorization, deps.config.CRON_SECRET)) {
+		if (
+			!hasBearerSecret(request.headers.authorization, deps.config.CRON_SECRET)
+		) {
 			response.status(401).json({ error: "UNAUTHORIZED" });
 			return;
 		}
@@ -467,6 +476,43 @@ export function createApp(deps: AppDependencies) {
 				asset,
 			]),
 		);
+		const persistedByMint = new Map(
+			await Promise.all(
+				tokens.map(async (token) => {
+					const mint = token.tokenAddress ?? SOLANA_NATIVE_MINT;
+					return [mint, await loadPortfolioMetadata(deps.store, mint)] as const;
+				}),
+			),
+		);
+		const unresolvedAssetIds = tokens.flatMap((token) => {
+			const mint = token.tokenAddress ?? SOLANA_NATIVE_MINT;
+			return knownByMint.has(mint) ||
+				mint === SOLANA_USDC_MINT ||
+				persistedByMint.get(mint)
+				? []
+				: [`sol:mainnet:${mint}`];
+		});
+		if (unresolvedAssetIds.length && deps.candidates.getCandidatesForDisplay) {
+			try {
+				const resolved =
+					await deps.candidates.getCandidatesForDisplay(unresolvedAssetIds);
+				for (const candidate of resolved) {
+					persistedByMint.set(candidate.contract, {
+						assetId: candidate.assetId,
+						mint: candidate.contract,
+						symbol: candidate.symbol,
+						name: candidate.name,
+						decimals: candidate.decimals,
+						iconUrl: candidate.iconUrl,
+					});
+				}
+				await persistPortfolioMetadata(deps.store, resolved).catch(
+					() => undefined,
+				);
+			} catch {
+				// Portfolio balances remain visible with a mint-based fallback.
+			}
+		}
 		response.json({
 			cluster: SOLANA_CLUSTER,
 			address,
@@ -476,31 +522,40 @@ export function createApp(deps: AppDependencies) {
 					const known = knownByMint.get(mint);
 					const stablecoin =
 						mint === SOLANA_USDC_MINT ? SOLANA_USDC_ASSET : undefined;
+					const persisted = persistedByMint.get(mint);
 					const balanceBaseUnits = hexBalanceToDecimal(token.tokenBalance);
 					const usdPrice = token.tokenPrices?.find(
 						(price) => price.currency.toLowerCase() === "usd",
 					);
 					return {
 						assetId:
-							known?.assetId ?? stablecoin?.assetId ?? `sol:mainnet:${mint}`,
+							known?.assetId ??
+							stablecoin?.assetId ??
+							persisted?.assetId ??
+							`sol:mainnet:${mint}`,
 						mint,
 						symbol:
 							known?.symbol ??
 							stablecoin?.symbol ??
+							persisted?.symbol ??
 							token.tokenMetadata?.symbol ??
-							"Unknown",
+							"TOKEN",
 						name:
 							known?.name ??
 							stablecoin?.name ??
+							persisted?.name ??
 							token.tokenMetadata?.name ??
-							"Unknown token",
+							portfolioTokenFallbackName(mint),
 						decimals:
 							known?.decimals ??
 							stablecoin?.decimals ??
+							persisted?.decimals ??
 							token.tokenMetadata?.decimals ??
 							0,
 						balanceBaseUnits,
-						iconUrl: token.tokenMetadata?.logo ?? undefined,
+						iconUrl:
+							persisted?.iconUrl ?? token.tokenMetadata?.logo ?? undefined,
+						explorerUrl: `https://solscan.io/token/${mint}`,
 						priceUsd: usdPrice
 							? Number(usdPrice.value)
 							: stablecoin
@@ -574,14 +629,18 @@ export function createApp(deps: AppDependencies) {
 		if (byOwner || ownerId === response.locals.wallet) return byOwner;
 		return deps.store.getPreferences(response.locals.wallet);
 	};
-	const timezoneSchema = z.string().min(1).max(100).refine((timezone) => {
-		try {
-			Intl.DateTimeFormat("en", { timeZone: timezone });
-			return true;
-		} catch {
-			return false;
-		}
-	}, "Invalid IANA timezone");
+	const timezoneSchema = z
+		.string()
+		.min(1)
+		.max(100)
+		.refine((timezone) => {
+			try {
+				Intl.DateTimeFormat("en", { timeZone: timezone });
+				return true;
+			} catch {
+				return false;
+			}
+		}, "Invalid IANA timezone");
 
 	app.post(
 		"/api/account/bootstrap",
@@ -629,9 +688,7 @@ export function createApp(deps: AppDependencies) {
 			response.status(409).json({ error: "CHAIN_WALLET_MISMATCH" });
 			return;
 		}
-		if (
-			!providerConfigured(deps.config, preferences.executionProvider)
-		) {
+		if (!providerConfigured(deps.config, preferences.executionProvider)) {
 			response.status(422).json({
 				error: "EXECUTION_PROVIDER_UNAVAILABLE",
 				message: `${providerLabel(preferences.executionProvider)} is not configured.`,
@@ -686,10 +743,7 @@ export function createApp(deps: AppDependencies) {
 			await assertCanonicalOwner(response);
 			const chain =
 				storedPreferences?.activeChain ??
-				appChainSchema
-					.optional()
-					.default("SOLANA")
-					.parse(request.body?.chain);
+				appChainSchema.optional().default("SOLANA").parse(request.body?.chain);
 			if (chain !== "SOLANA") {
 				response.status(422).json({
 					error: "SOLANA_ONLY",
@@ -970,11 +1024,14 @@ export function createApp(deps: AppDependencies) {
 		"/api/sessions/:sessionId/budget",
 		requireFeedWallet,
 		async (request, response) => {
-			const session = await deps.store.getSession(String(request.params.sessionId));
+			const session = await deps.store.getSession(
+				String(request.params.sessionId),
+			);
 			if (
 				!session ||
 				session.wallet !== response.locals.wallet ||
-				session.ownerId.toLowerCase() !== preferenceOwner(response).toLowerCase()
+				session.ownerId.toLowerCase() !==
+					preferenceOwner(response).toLowerCase()
 			) {
 				response.status(404).json({ error: "SESSION_NOT_FOUND" });
 				return;
@@ -1172,6 +1229,9 @@ export function createApp(deps: AppDependencies) {
 				return { ...candidate, quote };
 			});
 			validateExecutionSelection(parsed, quotedCandidates);
+			await persistPortfolioMetadata(deps.store, quotedCandidates).catch(
+				() => undefined,
+			);
 			timing.mark("execution");
 			const plan = {
 				executionId: session.executionId ?? randomUUID(),
@@ -1198,11 +1258,11 @@ export function createApp(deps: AppDependencies) {
 			};
 			const execution = session.executionId
 				? await deps.store.refreshPreparedExecution(
-							session.executionId,
-							expectedPlanHash,
-							plan,
-							budgetForTicket(0.1, parsed.periodLimitUsd).periodBudgetBaseUnits,
-						)
+						session.executionId,
+						expectedPlanHash,
+						plan,
+						budgetForTicket(0.1, parsed.periodLimitUsd).periodBudgetBaseUnits,
+					)
 				: await deps.store.reserveExecution(
 						session.id,
 						plan,
@@ -1291,10 +1351,7 @@ export function createApp(deps: AppDependencies) {
 				throw new Error("EXECUTION_PROVIDER_MISMATCH");
 			}
 			if (execution.plan.chain === "SOLANA") {
-				const provider = executionProvider(
-					deps,
-					execution.plan.provider,
-				);
+				const provider = executionProvider(deps, execution.plan.provider);
 				if (execution.status !== "PREPARED") {
 					if (execution.status === "SUBMITTED") {
 						response.json(execution);
@@ -1380,10 +1437,7 @@ export function createApp(deps: AppDependencies) {
 				throw new Error("EXECUTION_PROVIDER_MISMATCH");
 			}
 			if (execution.plan.chain === "SOLANA") {
-				const provider = executionProvider(
-					deps,
-					execution.plan.provider,
-				);
+				const provider = executionProvider(deps, execution.plan.provider);
 				const { execution: updated, pending } = await reconcileExecution({
 					execution,
 					session,
@@ -1474,7 +1528,10 @@ export function createApp(deps: AppDependencies) {
 					.json({ error: error.code, message: error.message });
 				return;
 			}
-			if (error instanceof Error && error.message === "PERIOD_BUDGET_EXCEEDED") {
+			if (
+				error instanceof Error &&
+				error.message === "PERIOD_BUDGET_EXCEEDED"
+			) {
 				response.status(422).json({
 					error: "PERIOD_BUDGET_EXCEEDED",
 					message:
@@ -1683,10 +1740,7 @@ async function rankFeed(
 	};
 }
 
-function providerConfigured(
-	config: AppConfig,
-	id: ExecutionProviderId,
-) {
+function providerConfigured(config: AppConfig, id: ExecutionProviderId) {
 	if (!config.liveExecution) {
 		return id === "JUPITER";
 	}

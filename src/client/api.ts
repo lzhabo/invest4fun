@@ -174,6 +174,7 @@ export interface SolanaPortfolioResponse {
 		decimals: number;
 		balanceBaseUnits: string;
 		iconUrl?: string;
+		explorerUrl?: string;
 		priceUsd?: number;
 		priceUpdatedAt?: string;
 	}>;
@@ -318,9 +319,10 @@ export const api = {
 	assetIcons: () => request<AssetIconsResponse>("/api/assets/icons"),
 	assetDetails,
 	assetHistory,
-	solanaBalance: (wallet: string) =>
+	solanaBalance: (wallet: string, signal?: AbortSignal) =>
 		request<SolanaBalanceResponse>(
 			`/api/balances/${encodeURIComponent(wallet)}/solana`,
+			{ signal },
 		),
 	solanaLatestBlockhash: async () => {
 		const response = await request<{

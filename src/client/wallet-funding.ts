@@ -31,8 +31,16 @@ export function classifyWalletFunding(
 export function shouldShowFunding(
 	state: WalletFundingState,
 	browsingWithoutFunding: boolean,
+	fundsReceived = false,
 ) {
-	return state !== "READY" && !browsingWithoutFunding;
+	return state !== "READY" && !fundsReceived && !browsingWithoutFunding;
+}
+
+export function hasReceivedFunds(balance: WalletFundingBalance) {
+	return (
+		safeBigInt(balance.usdcBalanceBaseUnits) > 0n ||
+		safeBigInt(balance.solBalanceLamports) > 0n
+	);
 }
 
 export function shouldOfferTopUp(errorCode: string) {
