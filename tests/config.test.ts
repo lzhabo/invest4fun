@@ -47,6 +47,16 @@ describe("execution modes", () => {
 		expect(config.RECONCILIATION_BATCH_SIZE).toBe(50);
 	});
 
+	it("bounds the Sentry trace sample rate", () => {
+		expect(
+			loadConfig({ ...base, SENTRY_TRACES_SAMPLE_RATE: "0.05" })
+				.SENTRY_TRACES_SAMPLE_RATE,
+		).toBe(0.05);
+		expect(() =>
+			loadConfig({ ...base, SENTRY_TRACES_SAMPLE_RATE: "1.1" }),
+		).toThrow();
+	});
+
 	it("rejects local live signing in a production process", () => {
 		expect(() =>
 			loadConfig({

@@ -18,6 +18,7 @@ import instrumentSerifRegularUrl from "@fontsource/instrument-serif/files/instru
 import { App } from "./App";
 import { api, type PublicConfig } from "./api";
 import { AppBootstrapSkeleton } from "./components/PageSkeletons";
+import { captureException, SentryErrorBoundary } from "./observability";
 import {
 	applyDocumentTheme,
 	readThemeSettings,
@@ -39,7 +40,6 @@ function Root() {
 	const [config, setConfig] = useState<PublicConfig>();
 	const [error, setError] = useState("");
 	const [themeSettings, setThemeSettings] = useState(initialThemeSettings);
-
 	useLayoutEffect(() => {
 		applyDocumentTheme(themeSettings.SOLANA);
 	}, [themeSettings.SOLANA]);
@@ -53,13 +53,14 @@ function Root() {
 		api
 			.config()
 			.then(setConfig)
-			.catch((caught) =>
+			.catch((caught) => {
+				captureException(caught);
 				setError(
 					caught instanceof Error
 						? caught.message
 						: "Could not load app configuration",
-				),
-			);
+				);
+			});
 	}, []);
 
 	if (error) {
@@ -127,7 +128,19 @@ if (!root) throw new Error("Root element is missing");
 
 createRoot(root).render(
 	<StrictMode>
-		<Root />
-		<Analytics />
+		<SentryErrorBoundary
+			fallback={
+				<main className="fatal-state">
+					<h1>invest4.fun is unavailable</h1>
+					<p>
+						The application encountered an unexpected error. Please refresh
+						and try again.
+					</p>
+				</main>
+			}
+		>
+			<Root />
+			<Analytics />
+		</SentryErrorBoundary>
 	</StrictMode>,
 );

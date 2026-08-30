@@ -31,6 +31,8 @@ export const CONTENT_SECURITY_POLICY_DIRECTIVES: Record<string, string[]> = {
 		"https://*.g.alchemy.com",
 		"https://explorer-api.walletconnect.com",
 		"https://api.mainnet-beta.solana.com",
+		"https://*.ingest.sentry.io",
+		"https://*.ingest.us.sentry.io",
 		"https://vitals.vercel-insights.com",
 		"wss://api.mainnet-beta.solana.com",
 		"wss://relay.walletconnect.com",

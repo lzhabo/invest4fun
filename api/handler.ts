@@ -1,3 +1,4 @@
+import "../src/server/instrument.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServerApp } from "../src/server/bootstrap.js";
 

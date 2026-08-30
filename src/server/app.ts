@@ -82,6 +82,13 @@ import {
 	persistPortfolioMetadata,
 	portfolioTokenFallbackName,
 } from "./portfolio-metadata.js";
+import {
+	captureOperationalAlert,
+	captureOperationalFailure,
+	captureRequestFailure,
+	requestObservability,
+	writeLog,
+} from "./observability.js";
 import { publicExecution } from "./public-execution.js";
 import { reconcileExecution } from "./reconcile-execution.js";
 import { sessionEpochId } from "./session-epoch.js";
@@ -152,6 +159,7 @@ export function createApp(deps: AppDependencies) {
 		deps.auth ??
 		new PrivyWalletAuth(deps.config.PRIVY_APP_ID, deps.config.PRIVY_APP_SECRET);
 	app.disable("x-powered-by");
+	app.use(requestObservability);
 	app.use(
 		helmet({
 			contentSecurityPolicy: {
@@ -185,6 +193,16 @@ export function createApp(deps: AppDependencies) {
 			chain: "SOLANA",
 			cluster: SOLANA_CLUSTER,
 		});
+	});
+
+	app.get("/api/health/ready", async (_request, response) => {
+		try {
+			await deps.store.healthCheck();
+			response.json({ status: "ready" });
+		} catch (error) {
+			captureOperationalFailure(error, "readiness_check");
+			response.status(503).json({ status: "unavailable" });
+		}
 	});
 
 	app.get("/api/cron/reconcile", async (request, response) => {
@@ -225,9 +243,28 @@ export function createApp(deps: AppDependencies) {
 				});
 				if (result.pending) pending += 1;
 				else terminal += 1;
-			} catch {
+			} catch (error) {
 				failed += 1;
+				captureOperationalFailure(error, "reconciliation", {
+					provider: execution.plan.provider,
+					status: execution.status,
+				});
 			}
+		}
+		writeLog(failed > 0 ? "warn" : "info", "reconciliation_completed", {
+			scanned: executions.length,
+			terminal,
+			pending,
+			failed,
+		});
+		if (failed > 0) {
+			captureOperationalAlert("reconciliation_failed", "error", { failed });
+		}
+		if (pending >= deps.config.RECONCILIATION_BATCH_SIZE) {
+			captureOperationalAlert("reconciliation_backlog", "warning", {
+				pending,
+				batchSize: deps.config.RECONCILIATION_BATCH_SIZE,
+			});
 		}
 		response.json({ scanned: executions.length, terminal, pending, failed });
 	});
@@ -882,13 +919,9 @@ export function createApp(deps: AppDependencies) {
 						await deps.marketData.enrichRankingCandidates(rankingCandidates);
 				} catch (error) {
 					if (session.chain !== "SOLANA") throw error;
-					console.warn(
-						JSON.stringify({
-							event: "market_enrichment_unavailable",
-							chain: session.chain,
-							reason: error instanceof Error ? error.message : String(error),
-						}),
-					);
+					captureOperationalFailure(error, "market_enrichment", {
+						chain: session.chain,
+					});
 				}
 			}
 			if (!rankingCandidates.length) {
@@ -1283,6 +1316,12 @@ export function createApp(deps: AppDependencies) {
 						plan,
 						budgetForTicket(0.1, parsed.periodLimitUsd).periodBudgetBaseUnits,
 					);
+			writeLog("info", "execution_prepared", {
+				requestId: response.locals.requestId,
+				provider: execution.plan.provider,
+				status: execution.status,
+				legs: execution.legs.length,
+			});
 			timing.mark("store");
 			timing.apply(response);
 			response.json({
@@ -1421,6 +1460,24 @@ export function createApp(deps: AppDependencies) {
 				});
 				const current = broadcast.execution;
 				const hasUnknownBroadcast = broadcast.hasUnknownBroadcast;
+				writeLog(
+					hasUnknownBroadcast ? "warn" : "info",
+					"execution_broadcast",
+					{
+						requestId: response.locals.requestId,
+						provider: current.plan.provider,
+						status: current.status,
+						unknown: hasUnknownBroadcast,
+						legs: current.legs.length,
+					},
+				);
+				if (hasUnknownBroadcast) {
+					captureOperationalAlert("execution_broadcast_unknown", "error", {
+						provider: current.plan.provider,
+						status: current.status,
+						legs: current.legs.length,
+					});
+				}
 				response.status(hasUnknownBroadcast ? 202 : 200).json({
 					...publicExecution(current),
 					...(hasUnknownBroadcast
@@ -1470,6 +1527,13 @@ export function createApp(deps: AppDependencies) {
 					session,
 					provider,
 					store: deps.store,
+				});
+				writeLog(pending ? "warn" : "info", "execution_reconciled", {
+					requestId: response.locals.requestId,
+					provider: updated.plan.provider,
+					status: updated.status,
+					pending,
+					legs: updated.legs.length,
 				});
 				response.status(pending ? 202 : 200).json({
 					...publicExecution(updated),
@@ -1578,14 +1642,7 @@ export function createApp(deps: AppDependencies) {
 				});
 				return;
 			}
-			console.error(
-				JSON.stringify({
-					event: "request_failed",
-					method: request.method,
-					path: request.path,
-					error: error instanceof Error ? error.message : String(error),
-				}),
-			);
+			captureRequestFailure(error, request, response);
 			response.status(500).json({
 				error: "REQUEST_FAILED",
 				message: "The request could not be completed. Please try again.",

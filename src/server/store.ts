@@ -67,6 +67,7 @@ export interface UserAccount {
 }
 
 export interface StateStore extends ProviderSnapshotCache {
+	healthCheck(): Promise<void>;
 	getAccount(privyUserId: string): Promise<UserAccount | undefined>;
 	getOrCreateAccount(
 		privyUserId: string,
@@ -132,6 +133,8 @@ export class MemoryStateStore implements StateStore {
 		string,
 		{ value: unknown; expiresAt: string }
 	>();
+
+	async healthCheck() {}
 
 	async getAccount(privyUserId: string) {
 		return this.accounts.get(privyUserId.toLowerCase());

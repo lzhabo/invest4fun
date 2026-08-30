@@ -25,6 +25,10 @@ const envSchema = z
 		RECONCILIATION_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
 		COINGECKO_API_KEY: z.string().optional(),
 		ZG_ROUTER_API_KEY: z.string().optional(),
+		SENTRY_DSN: z.string().url().optional(),
+		SENTRY_ENVIRONMENT: z.string().min(1).optional(),
+		SENTRY_RELEASE: z.string().min(1).optional(),
+		SENTRY_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0.05),
 	})
 	.superRefine((env, context) => {
 		if (
