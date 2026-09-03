@@ -11,6 +11,7 @@ import helmet from "helmet";
 import { formatUnits } from "viem";
 import { ZodError, z } from "zod";
 import { sha256 } from "../domain/canonical.js";
+import { assetDisplayName } from "../domain/asset-display.js";
 import {
 	AI_RANKING_POOL_SIZE,
 	FEED_PAGE_SIZE,
@@ -42,9 +43,11 @@ import {
 	feedRankingProviderIdSchema,
 	onboardingPreferencesSchema,
 	personalizationPreferencesSchema,
+	type Quote,
 	type RankingInput,
 	rankingInputSchema,
 	solanaAddressSchema,
+	ticketSizeToBaseUnits,
 } from "../domain/schemas.js";
 import {
 	SOLANA_ASSET_REGISTRY,
@@ -86,6 +89,8 @@ import { publicExecution } from "./public-execution.js";
 import { reconcileExecution } from "./reconcile-execution.js";
 import { sessionEpochId } from "./session-epoch.js";
 import type { StateStore } from "./store.js";
+import { StrategyGenerationService } from "./strategy-service.js";
+import type { XStocksCatalogSource } from "./adapters/xstocks-catalog.js";
 
 export interface AppDependencies {
 	config: AppConfig;
@@ -116,6 +121,7 @@ export interface AppDependencies {
 	icons?: AssetIconProvider;
 	marketData?: MarketDataProvider;
 	history?: Pick<MarketDataProvider, "history">;
+	xstocks?: XStocksCatalogSource;
 	fetcher?: typeof fetch;
 }
 
@@ -145,6 +151,11 @@ async function candidatesForExactAmounts(
 
 export function createApp(deps: AppDependencies) {
 	const app = express();
+	const strategyGenerator = new StrategyGenerationService(
+		deps.candidates,
+		deps.inference,
+		deps.xstocks,
+	);
 	// Vercel terminates the public request before it reaches this function.
 	// Trust exactly that proxy hop so rate limiting keys off the real client IP.
 	if (deps.config.NODE_ENV === "production") app.set("trust proxy", 1);
@@ -261,6 +272,19 @@ export function createApp(deps: AppDependencies) {
 			slotBudgetBaseUnits: DEFAULT_BUDGET.slotBudgetBaseUnits,
 			maxCards: DEFAULT_BUDGET.maxCards,
 			privy: { appId: deps.config.PRIVY_APP_ID },
+		});
+	});
+
+	app.get("/api/v1/builder/candidates", async (_request, response) => {
+		const assets = await strategyGenerator.assets();
+		response.set("Cache-Control", "public, max-age=60").json({
+			assets: assets.map((asset) => ({
+				assetId: asset.assetId,
+				symbol: asset.symbol,
+				name: asset.name,
+				kind: asset.kind,
+				iconUrl: asset.iconUrl,
+			})),
 		});
 	});
 
@@ -515,70 +539,95 @@ export function createApp(deps: AppDependencies) {
 				// Portfolio balances remain visible with a mint-based fallback.
 			}
 		}
-		response.json({
-			cluster: SOLANA_CLUSTER,
-			address,
-			tokens: tokens
-				.map((token) => {
-					const mint = token.tokenAddress ?? SOLANA_NATIVE_MINT;
-					const known = knownByMint.get(mint);
-					const stablecoin =
-						mint === SOLANA_USDC_MINT ? SOLANA_USDC_ASSET : undefined;
-					const persisted = persistedByMint.get(mint);
-					const symbol =
-						known?.symbol ??
-						stablecoin?.symbol ??
-						persisted?.symbol ??
-						token.tokenMetadata?.symbol ??
-						"TOKEN";
-					const balanceBaseUnits = hexBalanceToDecimal(token.tokenBalance);
-					const usdPrice = token.tokenPrices?.find(
-						(price) => price.currency.toLowerCase() === "usd",
-					);
-					const iconUrls = [
-						solanaAssetIconUrl(
-							symbol,
-							persisted?.iconUrl ?? token.tokenMetadata?.logo ?? undefined,
-						),
-						persisted?.iconUrl,
-						token.tokenMetadata?.logo,
-					].filter(
-						(icon, index, icons): icon is string =>
-							Boolean(icon) && icons.indexOf(icon) === index,
-					);
-					return {
-						assetId:
-							known?.assetId ??
-							stablecoin?.assetId ??
-							persisted?.assetId ??
-							`sol:mainnet:${mint}`,
-						mint,
+		const portfolioTokens = tokens
+			.map((token) => {
+				const mint = token.tokenAddress ?? SOLANA_NATIVE_MINT;
+				const known = knownByMint.get(mint);
+				const stablecoin =
+					mint === SOLANA_USDC_MINT ? SOLANA_USDC_ASSET : undefined;
+				const persisted = persistedByMint.get(mint);
+				const symbol =
+					known?.symbol ??
+					stablecoin?.symbol ??
+					persisted?.symbol ??
+					token.tokenMetadata?.symbol ??
+					"TOKEN";
+				const balanceBaseUnits = hexBalanceToDecimal(token.tokenBalance);
+				const usdPrice = token.tokenPrices?.find(
+					(price) => price.currency.toLowerCase() === "usd",
+				);
+				const iconUrls = [
+					solanaAssetIconUrl(
 						symbol,
-						name:
-							known?.name ??
+						persisted?.iconUrl ?? token.tokenMetadata?.logo ?? undefined,
+					),
+					persisted?.iconUrl,
+					token.tokenMetadata?.logo,
+				].filter(
+					(icon, index, icons): icon is string =>
+						Boolean(icon) && icons.indexOf(icon) === index,
+				);
+				return {
+					assetId:
+						known?.assetId ??
+						stablecoin?.assetId ??
+						persisted?.assetId ??
+						`sol:mainnet:${mint}`,
+					mint,
+					symbol,
+					name: assetDisplayName(
+						known?.name ??
 							stablecoin?.name ??
 							persisted?.name ??
 							token.tokenMetadata?.name ??
 							portfolioTokenFallbackName(mint),
-						decimals:
-							known?.decimals ??
-							stablecoin?.decimals ??
-							persisted?.decimals ??
-							token.tokenMetadata?.decimals ??
-							0,
-						balanceBaseUnits,
-						iconUrl: iconUrls[0],
-						iconUrls,
-						explorerUrl: `https://solscan.io/token/${mint}`,
-						priceUsd: usdPrice
-							? Number(usdPrice.value)
-							: stablecoin
-								? 1
-								: undefined,
-						priceUpdatedAt: usdPrice?.lastUpdatedAt,
-					};
-				})
-				.filter((token) => BigInt(token.balanceBaseUnits) > 0n),
+					),
+					decimals:
+						known?.decimals ??
+						stablecoin?.decimals ??
+						persisted?.decimals ??
+						token.tokenMetadata?.decimals ??
+						0,
+					balanceBaseUnits,
+					iconUrl: iconUrls[0],
+					iconUrls,
+					explorerUrl: `https://solscan.io/token/${mint}`,
+					priceUsd: usdPrice
+						? Number(usdPrice.value)
+						: stablecoin
+							? 1
+							: undefined,
+					priceUpdatedAt: usdPrice?.lastUpdatedAt,
+					priceSource: (usdPrice ? "alchemy" : undefined) as
+						| "alchemy"
+						| "geckoterminal"
+						| undefined,
+				};
+			})
+			.filter((token) => BigInt(token.balanceBaseUnits) > 0n);
+		const missingPriceMints = portfolioTokens.flatMap((token) =>
+			token.priceUsd === undefined ? [token.mint] : [],
+		);
+		if (missingPriceMints.length && deps.marketData?.solanaTokenPrices) {
+			try {
+				const fallbackPrices =
+					await deps.marketData.solanaTokenPrices(missingPriceMints);
+				for (const token of portfolioTokens) {
+					if (token.priceUsd !== undefined) continue;
+					const fallback = fallbackPrices[token.mint];
+					if (!fallback) continue;
+					token.priceUsd = fallback.priceUsd;
+					token.priceUpdatedAt = fallback.updatedAt;
+					token.priceSource = "geckoterminal";
+				}
+			} catch {
+				// A failed market-data fallback must not hide wallet balances.
+			}
+		}
+		response.json({
+			cluster: SOLANA_CLUSTER,
+			address,
+			tokens: portfolioTokens,
 		});
 	});
 
@@ -643,6 +692,31 @@ export function createApp(deps: AppDependencies) {
 		if (byOwner || ownerId === response.locals.wallet) return byOwner;
 		return deps.store.getPreferences(response.locals.wallet);
 	};
+
+	app.post(
+		"/api/v1/strategies/generate",
+		requireWallet,
+		async (request, response) => {
+			try {
+				response.json({
+					portfolioDraft: await strategyGenerator.generate(request.body),
+				});
+			} catch (error) {
+				if (error instanceof ZodError) throw error;
+				response.status(422).json({
+					error:
+						error instanceof Error
+							? error.message.split(":", 1)[0]
+							: "STRATEGY_GENERATION_FAILED",
+					message:
+						error instanceof Error
+							? error.message
+							: "The portfolio draft could not be generated.",
+				});
+			}
+		},
+	);
+
 	const timezoneSchema = z
 		.string()
 		.min(1)
@@ -1056,6 +1130,229 @@ export function createApp(deps: AppDependencies) {
 					session.ownerId,
 					session.epochId,
 				),
+			});
+		},
+	);
+
+	app.post(
+		"/api/sessions/:sessionId/builder/preflight",
+		requireFeedWallet,
+		async (request, response) => {
+			const session = await deps.store.getSession(
+				String(request.params.sessionId),
+			);
+			if (
+				!session ||
+				session.wallet !== response.locals.wallet ||
+				session.chain !== "SOLANA" ||
+				response.locals.chain !== "SOLANA"
+			) {
+				response.status(404).json({ error: "SESSION_NOT_FOUND" });
+				return;
+			}
+			await assertCanonicalOwner(response, session);
+			const parsed = executionRequestSchema.parse({
+				sessionId: session.id,
+				chain: "SOLANA",
+				cluster: SOLANA_CLUSTER,
+				inputToken: SOLANA_USDC_MINT,
+				periodLimitUsd: request.body?.periodLimitUsd,
+				selections: request.body?.selections,
+				slippageBps: 50,
+			});
+			if (parsed.selections.length > 8) {
+				response.status(422).json({
+					error: "TOO_MANY_BUILDER_ASSETS",
+					message: "A portfolio draft can contain at most 8 assets.",
+				});
+				return;
+			}
+			const assetIds = parsed.selections.map((selection) => selection.assetId);
+			if (new Set(assetIds).size !== assetIds.length) {
+				response.status(422).json({
+					error: "DUPLICATE_ASSET",
+					message: "Each asset may appear only once.",
+				});
+				return;
+			}
+			const currentPreferences = await preferencesFor(response);
+			if (
+				currentPreferences?.periodLimitUsd !== undefined &&
+				currentPreferences.periodLimitUsd !== parsed.periodLimitUsd
+			) {
+				response.status(409).json({
+					error: "PERIOD_LIMIT_CHANGED",
+					message:
+						"Your period limit changed. Refresh the portfolio before review.",
+				});
+				return;
+			}
+
+			const issues: Array<{
+				code: string;
+				message: string;
+				assetId?: string;
+			}> = [];
+			const requested = parsed.selections.reduce(
+				(total, selection) => total + BigInt(selection.amountInBaseUnits),
+				0n,
+			);
+			const used = BigInt(
+				await deps.store.getPeriodBudgetUsage(session.ownerId, session.epochId),
+			);
+			const periodBudget = ticketSizeToBaseUnits(parsed.periodLimitUsd);
+			if (used + requested > periodBudget) {
+				issues.push({
+					code: "BUDGET_EXCEEDED",
+					message: `This portfolio plus ${formatUnits(used, SOLANA_USDC_DECIMALS)} USDC already used exceeds the period limit.`,
+				});
+			}
+
+			const candidatesForSession = candidateProvider(
+				deps,
+				session.executionProvider,
+			);
+			const candidates: Candidate[] = [];
+			for (const selection of parsed.selections) {
+				try {
+					const resolved = await candidatesForSession.getCandidatesForExecution(
+						response.locals.wallet,
+						[selection.assetId],
+						selection.amountInBaseUnits,
+						new Date(),
+						response.locals.txOrigin,
+					);
+					const candidate = resolved.find(
+						(item) => item.assetId === selection.assetId,
+					);
+					if (candidate) candidates.push(candidate);
+					else {
+						issues.push({
+							code: "ASSET_NOT_EXECUTABLE",
+							assetId: selection.assetId,
+							message: "No executable Jupiter candidate is available.",
+						});
+					}
+				} catch {
+					issues.push({
+						code: "CANDIDATE_CHECK_FAILED",
+						assetId: selection.assetId,
+						message: "The executable-asset check failed.",
+					});
+				}
+			}
+
+			try {
+				validateExecutionAssets(parsed, candidates);
+			} catch (error) {
+				issues.push({
+					code:
+						error instanceof PolicyError ? error.code : "POLICY_CHECK_FAILED",
+					message:
+						error instanceof Error
+							? error.message
+							: "The portfolio failed policy validation.",
+				});
+			}
+
+			const executionForSession = executionProvider(
+				deps,
+				session.executionProvider,
+			);
+			const quotes: Quote[] = [];
+			for (const selection of parsed.selections) {
+				const candidate = candidates.find(
+					(item) => item.assetId === selection.assetId,
+				);
+				if (!candidate) continue;
+				try {
+					quotes.push(
+						await executionForSession.price(
+							response.locals.wallet,
+							response.locals.txOrigin,
+							candidate,
+							selection.amountInBaseUnits,
+							parsed.slippageBps,
+						),
+					);
+				} catch (error) {
+					issues.push({
+						code:
+							error instanceof ExecutionProviderError
+								? error.code
+								: "ROUTE_CHECK_FAILED",
+						assetId: selection.assetId,
+						message:
+							error instanceof Error
+								? error.message
+								: "The current Jupiter route check failed.",
+					});
+				}
+			}
+			if (quotes.length === parsed.selections.length) {
+				try {
+					validateExecutionSelection(
+						parsed,
+						candidates.map((candidate) => ({
+							...candidate,
+							quote: quotes.find(
+								(quote) => quote.assetId === candidate.assetId,
+							),
+						})),
+					);
+				} catch (error) {
+					issues.push({
+						code:
+							error instanceof PolicyError ? error.code : "QUOTE_CHECK_FAILED",
+						message:
+							error instanceof Error
+								? error.message
+								: "The current quotes failed validation.",
+					});
+				}
+			}
+
+			if (deps.config.liveExecution) {
+				if (!deps.config.SOLANA_RPC_URL) {
+					issues.push({
+						code: "BALANCE_CHECK_FAILED",
+						message: "The latest wallet balance could not be checked.",
+					});
+				} else {
+					try {
+						const balance = await solanaUsdcBalance(
+							deps.fetcher ?? fetch,
+							deps.config.SOLANA_RPC_URL,
+							response.locals.wallet,
+						);
+						if (balance < requested) {
+							issues.push({
+								code: "INSUFFICIENT_FUNDS",
+								message: `Portfolio requires ${formatUnits(requested, SOLANA_USDC_DECIMALS)} USDC, but the wallet has ${formatUnits(balance, SOLANA_USDC_DECIMALS)} USDC.`,
+							});
+						}
+					} catch {
+						issues.push({
+							code: "BALANCE_CHECK_FAILED",
+							message: "The latest wallet balance check failed.",
+						});
+					}
+				}
+			}
+
+			const checkedAt = new Date();
+			const quoteExpiry = quotes
+				.map((quote) => Date.parse(quote.expiresAt))
+				.filter(Number.isFinite);
+			response.json({
+				candidates,
+				issues,
+				checkedAt: checkedAt.toISOString(),
+				expiresAt: new Date(
+					quoteExpiry.length
+						? Math.min(...quoteExpiry)
+						: checkedAt.getTime() + 30_000,
+				).toISOString(),
 			});
 		},
 	);

@@ -7,6 +7,9 @@ import {
 describe("primary view routing", () => {
 	it.each([
 		["week", "/feed"],
+		["builder", "/builder"],
+		["ideas", "/ideas"],
+		["market", "/market"],
 		["positions", "/portfolio"],
 		["account", "/account"],
 	] as const)("maps %s to %s", (view, path) => {
@@ -21,6 +24,5 @@ describe("primary view routing", () => {
 
 	it("rejects unknown product pages", () => {
 		expect(primaryViewFromPathname("/activity")).toBeUndefined();
-		expect(primaryViewFromPathname("/ideas")).toBeUndefined();
 	});
 });

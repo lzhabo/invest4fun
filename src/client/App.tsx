@@ -18,11 +18,13 @@ import {
 	nextFeedExcludedAssetIds,
 	shouldPrefetchNextFeed,
 } from "../domain/feed-pagination";
+import { type BundleBasketItem, bundleExecutionLegs } from "../domain/ideas";
 import {
 	type Candidate,
 	formatTicketSizeUsd,
 	type OnboardingPreferences,
 } from "../domain/schemas";
+import { normalizeWeights } from "../domain/strategies";
 import { resolveAccountBootstrap } from "./account-bootstrap";
 import {
 	ApiError,
@@ -39,9 +41,12 @@ import { chartPrefetchRequests } from "./chart-loading-policy";
 import { AccountScreen } from "./components/AccountScreen";
 import { AppShell } from "./components/AppShell";
 import { BudgetRail } from "./components/BudgetRail";
+import { type BuilderDraft, BuilderScreen } from "./components/BuilderScreen";
+import { CommunityIdeasScreen } from "./components/CommunityIdeasScreen";
 import { FeedCardSkeleton } from "./components/FeedCardSkeleton";
 import { FundingNotifications } from "./components/FundingNotifications";
 import { FundingScreen } from "./components/FundingScreen";
+import { IdeasScreen } from "./components/IdeasScreen";
 import { Confetti } from "./components/magicui/confetti";
 import { Onboarding } from "./components/Onboarding";
 import { AppBootstrapSkeleton } from "./components/PageSkeletons";
@@ -53,6 +58,7 @@ import { mergeRefreshedFeed } from "./feed-refresh";
 import { openFeedSession } from "./feed-session";
 import { checkFundingWithin } from "./funding-check";
 import { stageAfterPrimaryNavigation } from "./funding-navigation";
+import { newAccountPreferences } from "./onboarding-defaults";
 import {
 	readAccountPreferences,
 	removeLegacyPreferences,
@@ -174,6 +180,13 @@ export function App({
 	const [retrySelections, setRetrySelections] = useState<
 		Array<{ candidate: Candidate; amountInBaseUnits: string }> | undefined
 	>();
+	const [builderDraft, setBuilderDraft] = useState<BuilderDraft>({
+		prompt: "",
+		amountCents: 10_000,
+	});
+	const [builderBasket, setBuilderBasket] = useState<BundleBasketItem>();
+	const [ideaBasket, setIdeaBasket] = useState<BundleBasketItem[]>([]);
+	const [reviewReturnView, setReviewReturnView] = useState<PrimaryView>("week");
 	const [feedTicketSizeUsd, setFeedTicketSizeUsd] = useState<number>();
 	const [periodUsedUsd, setPeriodUsedUsd] = useState(0);
 	const [assetInfoOpen, setAssetInfoOpen] = useState(false);
@@ -240,6 +253,10 @@ export function App({
 	}, [authenticated, linkWallet, login, privyReady]);
 
 	useEffect(() => {
+		if (config.demoMode) {
+			configureApiAuth(undefined);
+			return () => configureApiAuth(undefined);
+		}
 		configureApiAuth({
 			getAccessToken,
 			getWalletAddress: () => wallet || undefined,
@@ -247,7 +264,7 @@ export function App({
 			getWalletChain: () => "SOLANA",
 		});
 		return () => configureApiAuth(undefined);
-	}, [getAccessToken, selectedSolanaWallet?.address, wallet]);
+	}, [config.demoMode, getAccessToken, selectedSolanaWallet?.address, wallet]);
 
 	useEffect(() => {
 		removeLegacyPreferences();
@@ -427,6 +444,68 @@ export function App({
 		],
 	);
 
+	const ensureBuilderSession = useCallback(async () => {
+		if (
+			!config.demoMode &&
+			(!privyReady || !authenticated || !selectedSolanaWallet)
+		) {
+			connectWallet();
+			return undefined;
+		}
+		if (session && feed && preferences) return session;
+		const plan = preferences ?? defaultBuilderPreferences();
+		if (selectedSolanaWallet) {
+			configureApiAuth({
+				getAccessToken,
+				getWalletAddress: () => selectedSolanaWallet.address,
+				getTxOriginAddress: () => selectedSolanaWallet.address,
+				getWalletChain: () => "SOLANA",
+			});
+		}
+		setError("");
+		try {
+			await api.savePreferences(plan);
+			const opened = await api.openSession(
+				plan.cadence,
+				plan.executionProvider,
+				plan.activeChain,
+				plan.feedRankingProvider,
+			);
+			const generated = await generateFeedWithRetry(opened.id, plan);
+			rememberWarnings(warningsByAssetId.current, generated);
+			const budgetUsage = await api.sessionBudget(opened.id);
+			setPreferences(plan);
+			setPeriodUsedUsd(Number(budgetUsage.usedBaseUnits) / 1_000_000);
+			setSession(opened);
+			setFeed({
+				...generated,
+				candidates: shuffledFeedPage(generated.candidates, opened, 0),
+			});
+			setFeedUpdatedAt(Date.now());
+			setStage("swipe");
+			if (user?.id) writeAccountPreferences(user.id, plan);
+			return opened;
+		} catch (caught) {
+			setError(
+				caught instanceof Error
+					? caught.message
+					: "Could not prepare the Builder session.",
+			);
+			throw caught;
+		}
+	}, [
+		authenticated,
+		connectWallet,
+		config.demoMode,
+		feed,
+		getAccessToken,
+		preferences,
+		privyReady,
+		selectedSolanaWallet,
+		session,
+		user?.id,
+	]);
+
 	const bootstrapAccount = useCallback(async () => {
 		if (!privyReady) return;
 		if (!authenticated) {
@@ -451,8 +530,10 @@ export function App({
 		});
 		if (bootstrapRequestId.current !== requestId) return;
 		if (result.state === "new") {
-			setPlanNotice("");
-			setStage("onboarding");
+			const defaults = newAccountPreferences();
+			writeAccountPreferences(user.id, defaults);
+			await loadSession(defaults, { accountState: "new" });
+			setPlanNotice("Default settings applied. Edit them anytime in Account.");
 			return;
 		}
 		if (result.state === "returning") {
@@ -547,7 +628,12 @@ export function App({
 		() => feedBasketSelections(selected, ticketSizeUsd),
 		[selected, ticketSizeUsd],
 	);
-	const executionSelections = retrySelections ?? feedExecutionSelections;
+	const ideaExecutionSelections = ideaBasket.flatMap(bundleExecutionLegs);
+	const executionSelections = builderBasket
+		? bundleExecutionLegs(builderBasket)
+		: ideaExecutionSelections.length
+			? ideaExecutionSelections
+			: (retrySelections ?? feedExecutionSelections);
 	const reviewCandidates = executionSelections.map(
 		({ candidate }) => candidate,
 	);
@@ -738,6 +824,42 @@ export function App({
 	}
 
 	function removeFeedAsset(assetId: string) {
+		setBuilderBasket((basket) => {
+			if (!basket) return basket;
+			const next = basket.holdings.filter(
+				(holding) => holding.candidate.assetId !== assetId,
+			);
+			const weights = normalizeWeights(
+				next.map((holding) => holding.weightBps),
+			);
+			return {
+				...basket,
+				holdings: next.map((holding, index) => ({
+					...holding,
+					weightBps: weights[index] ?? holding.weightBps,
+				})),
+			};
+		});
+		setIdeaBasket((items) =>
+			items.flatMap((item) => {
+				const remaining = item.holdings.filter(
+					(holding) => holding.candidate.assetId !== assetId,
+				);
+				if (!remaining.length) return [];
+				const weights = normalizeWeights(
+					remaining.map((holding) => holding.weightBps),
+				);
+				return [
+					{
+						...item,
+						holdings: remaining.map((holding, index) => ({
+							...holding,
+							weightBps: weights[index] ?? holding.weightBps,
+						})),
+					},
+				];
+			}),
+		);
 		setSelectedIds((ids) => ids.filter((id) => id !== assetId));
 		setRetrySelections((selections) =>
 			selections?.filter(
@@ -750,6 +872,10 @@ export function App({
 	function navigate(target: View) {
 		scrollToTop();
 		setView(target);
+		if (target === "week") {
+			setBuilderBasket(undefined);
+			setIdeaBasket([]);
+		}
 		if (target !== "receipts") {
 			const targetPath = pathForPrimaryView(target);
 			if (window.location.pathname !== targetPath) {
@@ -815,7 +941,12 @@ export function App({
 		setStage(fundingReturn);
 	}, [fundingReturn, loadSession, preferences]);
 
-	if (entryView === "SKELETON") {
+	if (
+		entryView === "SKELETON" &&
+		view !== "builder" &&
+		view !== "ideas" &&
+		view !== "market"
+	) {
 		if (!bootstrapIssue) return <AppBootstrapSkeleton />;
 		return (
 			<main className="fatal-state account-bootstrap-error">
@@ -851,7 +982,7 @@ export function App({
 				onDismiss={walletFunding.dismissReceipt}
 			/>
 			<AppShell
-				active={stage === "review" ? "week" : view}
+				active={stage === "review" ? reviewReturnView : view}
 				onNavigate={navigate}
 				wallet={displayWallet}
 				onWallet={connectWallet}
@@ -868,7 +999,56 @@ export function App({
 						{planNotice}
 					</div>
 				) : null}
-				{entryView === "WALLET_REQUIRED" ? (
+				{view === "market" ? (
+					<CommunityIdeasScreen
+						onBack={() => navigate("builder")}
+						onUseIdea={(prompt) => {
+							setBuilderDraft((current) => ({
+								...current,
+								prompt,
+								portfolio: undefined,
+							}));
+							navigate("builder");
+						}}
+					/>
+				) : view === "ideas" && stage !== "review" ? (
+					<IdeasScreen
+						session={session}
+						onEnsureSession={ensureBuilderSession}
+						periodLimitUsd={periodLimitUsd}
+						usedUsd={
+							periodUsedUsd +
+							ideaBasket.reduce((sum, item) => sum + item.amountCents / 100, 0)
+						}
+						basketCount={ideaBasket.length}
+						onAdd={(item) => setIdeaBasket((items) => [...items, item])}
+						onReview={() => {
+							if (!ideaBasket.length) return;
+							setBuilderBasket(undefined);
+							setRetrySelections(undefined);
+							setReviewReturnView("ideas");
+							scrollToTop();
+							setStage("review");
+						}}
+					/>
+				) : view === "builder" && stage !== "review" ? (
+					<BuilderScreen
+						session={session}
+						periodLimitUsd={preferences?.periodLimitUsd ?? 100}
+						draft={builderDraft}
+						onDraftChange={setBuilderDraft}
+						onEnsureSession={ensureBuilderSession}
+						onExploreIdeas={() => navigate("market")}
+						onReview={(basket) => {
+							setIdeaBasket([]);
+							setBuilderBasket(basket);
+							setRetrySelections(undefined);
+							setReviewReturnView("builder");
+							scrollToTop();
+							setStage("review");
+						}}
+					/>
+				) : entryView === "WALLET_REQUIRED" ? (
 					<main className="swipe-page">
 						<section className="swipe-workspace">
 							<header className="page-heading">
@@ -898,9 +1078,7 @@ export function App({
 				) : stage === "onboarding" ? (
 					<Onboarding
 						config={config}
-						onComplete={(next) =>
-							loadSession(next, { accountState: "new" })
-						}
+						onComplete={(next) => loadSession(next, { accountState: "new" })}
 						privyReady={privyReady}
 						onChainPreview={() => undefined}
 					/>
@@ -1029,7 +1207,7 @@ export function App({
 						onBack={() => {
 							scrollToTop();
 							setStage("swipe");
-							setView("week");
+							setView(reviewReturnView);
 						}}
 						onSettled={(record) => {
 							setSettlement(record);
@@ -1372,4 +1550,18 @@ function executionCandidates(
 	const selected = withQuotes(current);
 	if (selected.length === record.plan.quotes.length) return selected;
 	return withQuotes(fallback);
+}
+
+function defaultBuilderPreferences(): OnboardingPreferences {
+	return {
+		executionProvider: "JUPITER",
+		activeChain: "SOLANA",
+		feedRankingProvider: "DETERMINISTIC",
+		cadence: "weekly",
+		periodLimitUsd: 100,
+		ticketSizeUsd: 10,
+		riskMode: "balanced",
+		assetClasses: ["CRYPTO", "STOCK_TOKEN"],
+		riskDisclosureAccepted: true,
+	};
 }

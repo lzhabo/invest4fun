@@ -5,6 +5,8 @@ import {
 	SolanaDemoExecutionProvider,
 } from "./adapters/solana-demo.js";
 import { JupiterProvider } from "./adapters/jupiter.js";
+import { ZeroGProvider } from "./adapters/zero-g.js";
+import { XStocksCatalogService } from "./adapters/xstocks-catalog.js";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { PostgresStateStore } from "./postgres-store.js";
@@ -15,6 +17,16 @@ export function createServerApp() {
 	const solanaDemo = new SolanaDemoCandidateProvider();
 	const solanaDemoJupiter = new SolanaDemoExecutionProvider("JUPITER");
 	const deterministic = new DeterministicRanker();
+	const inference = config.ZG_ROUTER_API_KEY
+		? new ZeroGProvider(
+				config.ZG_ROUTER_API_KEY,
+				config.ZG_MODEL,
+				config.ZG_TRUST_MODE,
+			)
+		: deterministic;
+	const xstocks = config.liveExecution
+		? new XStocksCatalogService(fetch)
+		: undefined;
 	const required = (value: string | undefined, name: string) => {
 		if (!value) throw new Error(`${name}_REQUIRED`);
 		return value;
@@ -48,9 +60,10 @@ export function createServerApp() {
 		config,
 		store,
 		candidates: defaultCandidates,
-		inference: deterministic,
+		inference,
 		rankingProviders: {
 			DETERMINISTIC: deterministic,
+			...(config.ZG_ROUTER_API_KEY ? { ZERO_G: inference } : {}),
 		},
 		execution: defaultExecution,
 		solanaExecutionProviders: { JUPITER: defaultExecution },
@@ -58,5 +71,6 @@ export function createServerApp() {
 		icons: config.liveExecution ? coinGecko : undefined,
 		marketData: config.liveExecution ? coinGecko : undefined,
 		history: config.liveExecution ? coinGecko : undefined,
+		xstocks,
 	});
 }

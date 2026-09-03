@@ -8,6 +8,7 @@ import {
 	useState,
 } from "react";
 import { visibleAssetTags } from "../../domain/asset-tag-config";
+import { assetDisplayName } from "../../domain/asset-display";
 import type { Candidate } from "../../domain/schemas";
 import {
 	type AssetDetailsResponse,
@@ -425,7 +426,7 @@ function PriceSparkline({
 												href={`https://www.coingecko.com/en/coins/${encodeURIComponent(candidate.coingeckoId)}`}
 												target="_blank"
 												rel="noopener noreferrer"
-												aria-label={`View ${candidate.name} on CoinGecko`}
+												aria-label={`View ${assetDisplayName(candidate.name)} on CoinGecko`}
 											>
 												<img src="/assets/providers/coingecko.svg" alt="" />
 												Rank #{candidate.marketCapRank}
@@ -631,7 +632,7 @@ export function SwipeCard({
 					/>
 					<div>
 						<h2>{candidate.symbol}</h2>
-						<p>{candidate.name}</p>
+						<p>{assetDisplayName(candidate.name)}</p>
 					</div>
 				</div>
 				{editingAmount ? (

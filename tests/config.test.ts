@@ -15,6 +15,17 @@ const base = {
 };
 
 describe("execution modes", () => {
+	it("uses Qwen for 0G portfolio generation unless explicitly overridden", () => {
+		expect(loadConfig(base).ZG_MODEL).toBe("qwen3.8-flash");
+		expect(loadConfig(base).ZG_TRUST_MODE).toBe("verified");
+		expect(loadConfig({ ...base, ZG_MODEL: "qwen3.7-plus" }).ZG_MODEL).toBe(
+			"qwen3.7-plus",
+		);
+		expect(
+			loadConfig({ ...base, ZG_TRUST_MODE: "private" }).ZG_TRUST_MODE,
+		).toBe("private");
+	});
+
 	it("allows local live signing only as a development-time, demo-backed mode", () => {
 		const config = loadConfig({ ...base, LOCAL_LIVE_EXECUTION: "true" });
 		expect(config.demoMode).toBe(true);

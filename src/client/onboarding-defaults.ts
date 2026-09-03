@@ -16,19 +16,34 @@ export type NewAccountDraft = {
 	riskDisclosureAccepted: false;
 };
 
-export function newAccountDraft(): NewAccountDraft {
+export function newAccountPreferences() {
 	return {
 		activeChain: "SOLANA",
 		executionProvider: "JUPITER",
 		feedRankingProvider: "DETERMINISTIC",
 		cadence: "weekly",
 		periodLimitUsd: 50,
+		ticketSizeUsd: 0.1,
+		riskMode: "balanced",
+		assetClasses: ["CRYPTO", "STOCK_TOKEN"],
+		riskDisclosureAccepted: true,
+	} satisfies OnboardingPreferences;
+}
+
+export function newAccountDraft(): NewAccountDraft {
+	const defaults = newAccountPreferences();
+	return {
+		activeChain: defaults.activeChain,
+		executionProvider: defaults.executionProvider,
+		feedRankingProvider: defaults.feedRankingProvider,
+		cadence: defaults.cadence,
+		periodLimitUsd: defaults.periodLimitUsd,
 		periodLimitChoice: 50,
 		customPeriodLimitInput: "",
-		ticketSizeUsd: 0.1,
+		ticketSizeUsd: defaults.ticketSizeUsd,
 		ticketChoice: 0.1,
 		customTicketInput: "",
-		riskMode: "balanced",
+		riskMode: defaults.riskMode,
 		assetChoice: "BOTH",
 		riskDisclosureAccepted: false,
 	};

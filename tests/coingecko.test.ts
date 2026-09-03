@@ -14,6 +14,15 @@ const sol: RegistryAsset = {
 	coingeckoId: "solana",
 };
 
+const goldMiners: RegistryAsset = {
+	assetId: "sol:mainnet:GDXx",
+	symbol: "GDXx",
+	name: "VanEck Gold Miners xStock",
+	kind: "STOCK_TOKEN",
+	address: "GDXx",
+	decimals: 8,
+};
+
 describe("CoinGecko Solana market-data adapter", () => {
 	it("loads icons only from the Solana runtime registry", async () => {
 		const fetcher = vi.fn(async (input: string | URL | Request) => {
@@ -52,6 +61,46 @@ describe("CoinGecko Solana market-data adapter", () => {
 				{ timestamp: 1_700_000_000, price: 100 },
 				{ timestamp: 1_700_000_060, price: 101 },
 			],
+		});
+	});
+
+	it("loads xStock history with its underlying market symbol", async () => {
+		const fetcher = vi.fn(async (input: string | URL | Request) => {
+			const url = String(input);
+			if (url.includes("query1.finance.yahoo.com")) {
+				expect(url).toContain("/GDX?");
+				return new Response("rate limited", { status: 429 });
+			}
+			if (url.includes("assetclass=stocks")) {
+				expect(url).toContain("/GDX/historical?");
+				return Response.json({ data: null });
+			}
+			expect(url).toContain("/GDX/historical?");
+			expect(url).toContain("assetclass=etf");
+			return Response.json({
+				data: {
+					tradesTable: {
+						rows: [
+							{ date: "08/01/2026", close: "$72.00" },
+							{ date: "09/01/2026", close: "$81.00" },
+						],
+					},
+				},
+			});
+		});
+		const provider = new CoinGeckoIconProvider(undefined, fetcher as typeof fetch);
+
+		await expect(provider.history(goldMiners, "1M")).resolves.toMatchObject({
+			source: "nasdaq",
+			sourceAsset: "GDX",
+			points: [
+				{ timestamp: 1_785_542_400, price: 72 },
+				{ timestamp: 1_788_220_800, price: 81 },
+			],
+		});
+		await expect(provider.history(goldMiners, "3M")).resolves.toMatchObject({
+			source: "nasdaq",
+			sourceAsset: "GDX",
 		});
 	});
 

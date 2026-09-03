@@ -22,9 +22,18 @@ const envSchema = z
 		SOLANA_RPC_URL: z.string().url().optional(),
 		SOLANA_WS_URL: z.string().url().optional(),
 		CRON_SECRET: z.string().min(32).optional(),
-		RECONCILIATION_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
+		RECONCILIATION_BATCH_SIZE: z.coerce
+			.number()
+			.int()
+			.min(1)
+			.max(100)
+			.default(20),
 		COINGECKO_API_KEY: z.string().optional(),
 		ZG_ROUTER_API_KEY: z.string().optional(),
+		ZG_MODEL: z.string().min(1).default("qwen3.8-flash"),
+		ZG_TRUST_MODE: z
+			.enum(["private", "verified", "standard", "any"])
+			.default("verified"),
 	})
 	.superRefine((env, context) => {
 		if (
@@ -46,8 +55,8 @@ const envSchema = z
 			});
 		}
 		if (
-			(env.LOCAL_LIVE_EXECUTION === "true" ||
-				env.INVESTMADE_DEMO_MODE === "false")
+			env.LOCAL_LIVE_EXECUTION === "true" ||
+			env.INVESTMADE_DEMO_MODE === "false"
 		) {
 			for (const key of [
 				"JUPITER_API_KEY",

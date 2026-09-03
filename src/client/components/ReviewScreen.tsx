@@ -5,6 +5,7 @@ import {
 import { LoaderCircle, RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatUnits } from "viem";
+import { assetDisplayName } from "../../domain/asset-display";
 import type { Candidate } from "../../domain/schemas";
 import { formatTicketSizeUsd } from "../../domain/schemas";
 import type { ExecutionRecord, FeedResponse, WeeklySession } from "../api";
@@ -29,7 +30,6 @@ const MIN_SIGNING_WINDOW_MS = 10_000;
 
 export function ReviewScreen({
 	session,
-	feed,
 	selections,
 	onRemove,
 	onBack,
@@ -639,7 +639,7 @@ export function ReviewScreen({
 										/>
 										<b>
 											{candidate.symbol}
-											<small>{candidate.name}</small>
+											<small>{assetDisplayName(candidate.name)}</small>
 										</b>
 									</span>
 									<span className="ledger-value ledger-value-pay">
@@ -828,57 +828,6 @@ export function ReviewScreen({
 							</p>
 						</div>
 					) : null}
-					<div className="proof-block">
-						<h3>
-							{feed.proof.teeVerified
-								? "0G Private Allocation Jury"
-								: "Personal feed ranking"}
-						</h3>
-						<p>
-							<span>Ranking model</span>
-							<b>{feed.proof.model}</b>
-						</p>
-						<p>
-							<span>Provider</span>
-							<b>
-								{feed.proof.teeVerified
-									? shortHash(feed.proof.provider)
-									: "Local fixture"}
-							</b>
-						</p>
-						<p>
-							<span>Input commitment</span>
-							<b>{shortHash(feed.proof.inputCommitment)}</b>
-						</p>
-						<p>
-							<span>Output commitment</span>
-							<b>{shortHash(feed.proof.outputCommitment)}</b>
-						</p>
-						<p>
-							<span>TEE verified</span>
-							<b>
-								{feed.proof.teeVerified ? "Verified" : "Not available in demo"}
-							</b>
-						</p>
-						{feed.proof.teeVerified ? (
-							<div className="proof-links">
-								<a
-									href={zeroGProviderUrl(feed.proof.provider)}
-									target="_blank"
-									rel="noreferrer"
-								>
-									View TEE provider on 0G Explorer ↗
-								</a>
-								<a
-									href="https://0g.ai/product"
-									target="_blank"
-									rel="noreferrer"
-								>
-									How 0G private inference works ↗
-								</a>
-							</div>
-						) : null}
-					</div>
 					{executionConflict ? (
 						<button
 							type="button"
@@ -978,10 +927,6 @@ function executionQuotesSafeToSubmit(record: ExecutionRecord) {
 	);
 }
 
-function zeroGProviderUrl(provider: string) {
-	return `https://explorer.0g.ai/mainnet/blockchain/accounts/${encodeURIComponent(provider)}`;
-}
-
 function executionErrorMessage(caught: unknown) {
 	return caught instanceof Error ? caught.message : "Wallet execution failed.";
 }
@@ -1002,10 +947,6 @@ function formatOutput(raw: string, decimals: number) {
 	return Number.isFinite(value)
 		? value.toLocaleString(undefined, { maximumSignificantDigits: 6 })
 		: "—";
-}
-
-function shortHash(hash: string) {
-	return hash.length > 18 ? `${hash.slice(0, 10)}…${hash.slice(-6)}` : hash;
 }
 
 function base64ToBytes(value: string) {

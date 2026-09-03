@@ -112,6 +112,9 @@ export interface MarketDataProvider {
 	): Promise<RankingCandidate[]>;
 	history(asset: RegistryAsset, period: HistoryPeriod): Promise<HistorySeries>;
 	details?(asset: RegistryAsset): Promise<AssetDetails | undefined>;
+	solanaTokenPrices?(
+		mints: string[],
+	): Promise<Record<string, { priceUsd: number; updatedAt?: string }>>;
 }
 
 export type AssetDetails = {
@@ -151,11 +154,10 @@ export class CoinGeckoIconProvider implements AssetIconProvider {
 	async getIcons(): Promise<Record<string, string>> {
 		if (Date.now() < this.expiresAt) return this.cached;
 
-		const iconEntries = Object.entries(COINGECKO_COIN_IDS)
-			.map(
-				([symbol, id]) =>
-					[symbol, COINGECKO_ICON_ID_OVERRIDES[symbol] ?? id] as const,
-			);
+		const iconEntries = Object.entries(COINGECKO_COIN_IDS).map(
+			([symbol, id]) =>
+				[symbol, COINGECKO_ICON_ID_OVERRIDES[symbol] ?? id] as const,
+		);
 		const ids = [...new Set(iconEntries.map(([, id]) => id))];
 		const response = await this.fetcher(
 			`${COINGECKO_MARKETS_URL}?vs_currency=usd&ids=${encodeURIComponent(ids.join(","))}&per_page=250&page=1`,
@@ -199,9 +201,7 @@ export class CoinGeckoIconProvider implements AssetIconProvider {
 		const onchainByAddress = new Map(
 			onchainRows.flatMap((row) => {
 				const address = row.attributes?.address;
-				return address
-					? [[onchainKey(address), row.attributes] as const]
-					: [];
+				return address ? [[onchainKey(address), row.attributes] as const] : [];
 			}),
 		);
 		const classificationCandidates = [...onchainCandidates].sort(
@@ -236,12 +236,10 @@ export class CoinGeckoIconProvider implements AssetIconProvider {
 					const staticId = COINGECKO_COIN_IDS[candidate.symbol];
 					const addressId =
 						candidate.contract &&
-						(onchainByAddress.get(
-							onchainKey(candidate.contract),
-						)?.coingecko_coin_id ??
-							tokenInfoByAddress.get(
-								onchainKey(candidate.contract),
-							)?.coingecko_coin_id);
+						(onchainByAddress.get(onchainKey(candidate.contract))
+							?.coingecko_coin_id ??
+							tokenInfoByAddress.get(onchainKey(candidate.contract))
+								?.coingecko_coin_id);
 					return [candidate.coingeckoId, staticId, addressId].filter(
 						(id): id is string => Boolean(id),
 					);
@@ -360,6 +358,32 @@ export class CoinGeckoIconProvider implements AssetIconProvider {
 						: candidate.marketDataSource,
 			};
 		});
+	}
+
+	async solanaTokenPrices(
+		mints: string[],
+	): Promise<Record<string, { priceUsd: number; updatedAt?: string }>> {
+		const rows = await this.onchainMarketRows(mints);
+		return Object.fromEntries(
+			rows.flatMap((row) => {
+				const address = row.attributes?.address;
+				const priceUsd = positiveNumber(row.attributes?.price_usd);
+				if (!address || priceUsd === undefined) return [];
+				return [
+					[
+						onchainKey(address),
+						{
+							priceUsd,
+							updatedAt: row.attributes?.last_trade_timestamp
+								? new Date(
+										row.attributes.last_trade_timestamp * 1_000,
+									).toISOString()
+								: undefined,
+						},
+					] as const,
+				];
+			}),
+		);
 	}
 
 	async details(asset: RegistryAsset): Promise<AssetDetails | undefined> {
@@ -534,7 +558,9 @@ export class CoinGeckoIconProvider implements AssetIconProvider {
 		if (asset.kind === "STOCK_TOKEN" || period === "ALL") {
 			const yahooSymbol = yahooHistorySymbol(asset);
 			if (yahooSymbol) {
-				const points = await this.yahooHistory(yahooSymbol, period).catch(() => []);
+				const points = await this.yahooHistory(yahooSymbol, period).catch(
+					() => [],
+				);
 				if (hasPriceMovement(points)) {
 					return {
 						source: "yahoo",
@@ -548,18 +574,30 @@ export class CoinGeckoIconProvider implements AssetIconProvider {
 
 		if (
 			asset.kind === "STOCK_TOKEN" &&
-			(period === "1M" || period === "1Y" || period === "ALL")
+			(period === "1M" ||
+				period === "3M" ||
+				period === "1Y" ||
+				period === "ALL")
 		) {
-			const referencePoints = await this.nasdaqHistory(
-				asset.symbol,
+			const referenceSymbol = yahooHistorySymbol(asset) ?? asset.symbol;
+			const primaryAssetClass = nasdaqAssetClass(referenceSymbol);
+			let referencePoints = await this.nasdaqHistory(
+				referenceSymbol,
 				period,
-				nasdaqAssetClass(asset.symbol),
+				primaryAssetClass,
 			).catch(() => []);
+			if (referencePoints.length < 2) {
+				referencePoints = await this.nasdaqHistory(
+					referenceSymbol,
+					period,
+					primaryAssetClass === "etf" ? "stocks" : "etf",
+				).catch(() => []);
+			}
 			if (referencePoints.length >= 2) {
 				return {
 					source: "nasdaq",
 					points: referencePoints,
-					sourceAsset: asset.symbol,
+					sourceAsset: referenceSymbol,
 					isCompleteHistory: false,
 				};
 			}
@@ -671,10 +709,10 @@ export class CoinGeckoIconProvider implements AssetIconProvider {
 
 	private async nasdaqHistory(
 		symbol: string,
-		period: "1M" | "1Y" | "ALL",
+		period: "1M" | "3M" | "1Y" | "ALL",
 		assetClass: "etf" | "stocks" = "stocks",
 	): Promise<PricePoint[]> {
-		const lookbackDays = period === "1M" ? 35 : 370;
+		const lookbackDays = period === "1M" ? 35 : period === "3M" ? 100 : 370;
 		const fromDate =
 			period === "ALL"
 				? "1970-01-01"
@@ -817,7 +855,10 @@ function parseNasdaqDate(value: string | undefined): number | undefined {
 
 function yahooHistorySymbol(asset: RegistryAsset) {
 	if (asset.kind === "STOCK_TOKEN") {
-		return YAHOO_STOCK_SYMBOLS[asset.symbol.toUpperCase()] ?? asset.symbol;
+		return (
+			YAHOO_STOCK_SYMBOLS[asset.symbol.toUpperCase()] ??
+			asset.symbol.replace(/x$/i, "")
+		);
 	}
 	return YAHOO_CRYPTO_SYMBOLS[asset.symbol.toUpperCase()];
 }

@@ -1,3 +1,4 @@
+import { assetDisplayName } from "../../domain/asset-display";
 import type { Candidate, OnboardingPreferences } from "../../domain/schemas";
 import { formatTicketSizeUsd } from "../../domain/schemas";
 import { AssetMark } from "./AssetMark";
@@ -72,12 +73,10 @@ export function BudgetRail({
 			/>
 			<div className="budget-meta">
 				<span className="quote-provider">
-					Quotes execution: <i aria-hidden="true" />{" "}
-					Jupiter
+					Quotes execution: <i aria-hidden="true" /> Jupiter
 				</span>
 				<span className="network-line">
-					Chain: <i aria-hidden="true" />{" "}
-					Solana
+					Chain: <i aria-hidden="true" /> Solana
 				</span>
 			</div>
 			{selected.length ? (
@@ -92,13 +91,13 @@ export function BudgetRail({
 								<AssetMark
 									assetId={candidate.assetId}
 									symbol={candidate.symbol}
-							iconUrl={candidate.iconUrl}
-							size="sm"
-							decorative
-						/>
+									iconUrl={candidate.iconUrl}
+									size="sm"
+									decorative
+								/>
 								<span className="basket-name">
 									<strong>{candidate.symbol}</strong>
-									<small>{candidate.name}</small>
+									<small>{assetDisplayName(candidate.name)}</small>
 								</span>
 								<span className="basket-amount">
 									<strong>{formatTicketSizeUsd(ticketSizeUsd)}</strong>

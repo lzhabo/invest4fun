@@ -248,7 +248,7 @@ export function AccountScreen({
 
 	return (
 		<main className="account-page">
-			<header className="account-heading">
+			<header className="page-heading account-heading">
 				<h1>Ready to invest.</h1>
 				<p>
 					Everything you need to manage your wallets, settings and investments

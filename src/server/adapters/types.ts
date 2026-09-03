@@ -9,6 +9,7 @@ import type {
 	RankingInput,
 	RankingOutput,
 } from "../../domain/schemas.js";
+import type { PortfolioGenerationModelInput } from "../../domain/strategies.js";
 
 export type CandidateDiscoveryOptions = {
 	includeCommunity?: boolean;
@@ -103,6 +104,9 @@ export interface PrivateInferenceProvider {
 			warnings?: string[];
 		};
 	}>;
+	generatePortfolioDraft?(
+		input: PortfolioGenerationModelInput,
+	): Promise<unknown>;
 }
 
 export interface FeedRankingProvider extends PrivateInferenceProvider {}

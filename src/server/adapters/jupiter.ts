@@ -10,6 +10,7 @@ import {
 	VersionedTransaction,
 } from "@solana/web3.js";
 import type { RegistryAsset } from "../../domain/constants.js";
+import { assetDisplayName } from "../../domain/asset-display.js";
 import type {
 	Candidate,
 	ExecutionRequest,
@@ -1051,7 +1052,7 @@ export class JupiterProvider implements ExecutionProvider, CandidateProvider {
 		const asset: SolanaAsset = curated ?? {
 			assetId: `sol:mainnet:${token.id}`,
 			symbol: token.symbol,
-			name: token.name,
+			name: assetDisplayName(token.name),
 			kind:
 				tokenClassification(token) === "TOKENIZED_STOCK"
 					? "STOCK_TOKEN"
@@ -1251,7 +1252,7 @@ function candidateFromAsset(
 		chain: "SOLANA",
 		assetId: asset.assetId,
 		symbol: asset.symbol,
-		name: asset.name,
+		name: assetDisplayName(asset.name),
 		kind: asset.kind,
 		contract: asset.address,
 		decimals: asset.decimals,
@@ -1272,7 +1273,7 @@ function candidateFromAsset(
 			1,
 			Math.min(10_000, Math.round((metadata.organicScore ?? 50) * 100)),
 		),
-		reason: `${asset.name} passed Jupiter token and market checks. A fresh USDC route is verified at review.`,
+		reason: `${assetDisplayName(asset.name)} passed Jupiter token and market checks. A fresh USDC route is verified at review.`,
 		evidenceIds: [`jupiter:token:${asset.address}`],
 	};
 }

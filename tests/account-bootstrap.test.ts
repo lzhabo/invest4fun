@@ -33,7 +33,7 @@ describe("account bootstrap", () => {
 		expect(events).toEqual(["account", "preferences"]);
 	});
 
-	it("starts onboarding only when the server confirms preferences are absent", async () => {
+	it("identifies a new account when the server confirms preferences are absent", async () => {
 		await expect(
 			resolveAccountBootstrap({
 				ensureAccount: async () => undefined,

@@ -7,6 +7,10 @@ import type {
 	FeedRankingProviderId,
 	OnboardingPreferences,
 } from "../domain/schemas.js";
+import type {
+	GenerateStrategyRequestInput,
+	PortfolioDraft,
+} from "../domain/strategies.js";
 
 export interface WeeklySession {
 	id: string;
@@ -175,12 +179,34 @@ export interface SolanaPortfolioResponse {
 		explorerUrl?: string;
 		priceUsd?: number;
 		priceUpdatedAt?: string;
+		priceSource?: "alchemy" | "coingecko" | "geckoterminal";
 	}>;
 }
 
 export interface PrepareExecutionSelection {
 	assetId: string;
 	amountInBaseUnits: string;
+}
+
+export interface BuilderCatalogItem {
+	assetId: string;
+	symbol: string;
+	name: string;
+	kind: "CRYPTO" | "STOCK_TOKEN";
+	iconUrl?: string;
+}
+
+export interface BuilderPreflightIssue {
+	code: string;
+	message: string;
+	assetId?: string;
+}
+
+export interface BuilderPreflightResponse {
+	candidates: Candidate[];
+	issues: BuilderPreflightIssue[];
+	checkedAt: string;
+	expiresAt: string;
 }
 
 let authProvider:
@@ -367,6 +393,25 @@ export const api = {
 			method: "POST",
 			body: JSON.stringify({ ...preferences, excludedAssetIds }),
 		}),
+	builderCandidates: () =>
+		request<{ assets: BuilderCatalogItem[] }>("/api/v1/builder/candidates"),
+	generateStrategy: (input: GenerateStrategyRequestInput) =>
+		request<{ portfolioDraft: PortfolioDraft }>("/api/v1/strategies/generate", {
+			method: "POST",
+			body: JSON.stringify(input),
+		}),
+	builderPreflight: (
+		sessionId: string,
+		selections: PrepareExecutionSelection[],
+		periodLimitUsd: number,
+	) =>
+		request<BuilderPreflightResponse>(
+			`/api/sessions/${sessionId}/builder/preflight`,
+			{
+				method: "POST",
+				body: JSON.stringify({ selections, periodLimitUsd }),
+			},
+		),
 	prepareExecution: (
 		sessionId: string,
 		selections: PrepareExecutionSelection[],

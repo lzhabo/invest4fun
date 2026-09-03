@@ -5,6 +5,9 @@ import { AppShell, PrimaryNav } from "./AppShell";
 describe("PrimaryNav", () => {
 	it("marks only the rendered Portfolio view as current", () => {
 		const html = renderToStaticMarkup(<PrimaryNav active="positions" />);
+		const labels = [...html.matchAll(/<span>([^<]+)<\/span>/g)].map(
+			(match) => match[1],
+		);
 		const currentLinks = (html.match(/<a[\s\S]*?<\/a>/g) ?? []).filter((link) =>
 			link.includes('aria-current="page"'),
 		);
@@ -15,9 +18,17 @@ describe("PrimaryNav", () => {
 		expect(currentLinks[0]).toContain("<span>Portfolio</span>");
 		expect(currentLinks[0]).not.toContain("<span>Account</span>");
 		expect(html).toContain('href="/feed"');
-		expect(html).not.toContain('href="/ideas"');
+		expect(html).toContain('href="/builder"');
+		expect(html).toContain('href="/ideas"');
 		expect(html).toContain('href="/account"');
-		expect(html).toContain("--primary-nav-count:3");
+		expect(html).toContain("--primary-nav-count:5");
+		expect(labels).toEqual([
+			"Feed",
+			"Ideas",
+			"Builder",
+			"Portfolio",
+			"Account",
+		]);
 	});
 });
 

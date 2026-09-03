@@ -1,6 +1,7 @@
 import { ChevronRight, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { formatUnits } from "viem";
+import { assetDisplayName } from "../../domain/asset-display";
 import type { Candidate } from "../../domain/schemas";
 import { api } from "../api";
 import { selectPortfolioHoldings } from "../portfolio";
@@ -57,9 +58,7 @@ export function PositionsScreen({
 								assetId: token.assetId,
 								iconUrl: token.iconUrl ?? known.iconUrl,
 								marketPriceUsd: token.priceUsd ?? known.marketPriceUsd,
-								marketDataSource: token.priceUsd
-									? "alchemy"
-									: known.marketDataSource,
+								marketDataSource: token.priceSource ?? known.marketDataSource,
 								marketDataUpdatedAt:
 									token.priceUpdatedAt ?? known.marketDataUpdatedAt,
 							}
@@ -75,7 +74,7 @@ export function PositionsScreen({
 								marketHealthy: true,
 								permissionAllowed: true,
 								marketPriceUsd: token.priceUsd,
-								marketDataSource: "alchemy",
+								marketDataSource: token.priceSource,
 								marketDataUpdatedAt: token.priceUpdatedAt,
 								iconUrl: token.iconUrl,
 								primaryClassification: "UNKNOWN",
@@ -136,7 +135,7 @@ export function PositionsScreen({
 
 	return (
 		<main className="positions-page">
-			<header className="positions-heading">
+			<header className="page-heading positions-heading">
 				<div>
 					<h1>Portfolio</h1>
 					<p>
@@ -216,10 +215,10 @@ export function PositionsScreen({
 												target="_blank"
 												rel="noopener noreferrer"
 											>
-												{candidate.name} ↗
+												{assetDisplayName(candidate.name)} ↗
 											</a>
 										) : (
-											<b>{candidate.name}</b>
+											<b>{assetDisplayName(candidate.name)}</b>
 										)}
 										<b>{holdingValue}</b>
 									</div>

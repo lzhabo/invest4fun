@@ -125,4 +125,76 @@ describe("Solana portfolio API", () => {
 			explorerUrl: `https://solscan.io/token/${mint}`,
 		});
 	});
+
+	it("uses CoinGecko onchain data when Alchemy omits a price and hides provider branding", async () => {
+		const mint = "XsXcJ6GZ9kVnjqGsjBnktRcuwMBmvKWh8S93RefZ1rF";
+		const candidates = new SolanaDemoCandidateProvider();
+		const execution = new SolanaDemoExecutionProvider("JUPITER");
+		const app = createApp({
+			config: loadConfig({
+				NODE_ENV: "test",
+				INVESTMADE_DEMO_MODE: "true",
+				PUBLIC_ORIGIN: "http://localhost:5173",
+				SESSION_SECRET: "test-secret-that-is-at-least-32-characters",
+				PRIVY_APP_ID: "test-privy-app-id",
+				PRIVY_APP_SECRET: "test-privy-app-secret",
+				SOLANA_RPC_URL: "https://solana-mainnet.g.alchemy.com/v2/test-key",
+			}),
+			store: new MemoryStateStore(),
+			candidates,
+			solanaCandidateProviders: { JUPITER: candidates },
+			inference: new DeterministicRanker(),
+			execution,
+			solanaExecutionProviders: { JUPITER: execution },
+			marketData: {
+				async enrichRankingCandidates(items) {
+					return items;
+				},
+				async history() {
+					return { source: "coingecko", points: [] };
+				},
+				async solanaTokenPrices(mints) {
+					expect(mints).toEqual([mint]);
+					return {
+						[mint]: {
+							priceUsd: 163.42,
+							updatedAt: "2026-09-03T09:00:00.000Z",
+						},
+					};
+				},
+			},
+			fetcher: async () =>
+				new Response(
+					JSON.stringify({
+						data: {
+							tokens: [
+								{
+									tokenAddress: mint,
+									tokenBalance: "0x1cf7c580",
+									tokenMetadata: {
+										symbol: "AMDx",
+										name: "AMD xStock",
+										decimals: 8,
+									},
+								},
+							],
+						},
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				),
+		});
+
+		const response = await request(app)
+			.get("/api/portfolio/4JFKA5smQXNHvDWiikRwnk5zCTBsN6vYiTfzAP9zPvSp/solana")
+			.expect(200);
+
+		expect(response.body.tokens[0]).toMatchObject({
+			mint,
+			symbol: "AMDx",
+			name: "AMD",
+			priceUsd: 163.42,
+			priceUpdatedAt: "2026-09-03T09:00:00.000Z",
+			priceSource: "geckoterminal",
+		});
+	});
 });

@@ -3,6 +3,8 @@ import {
 	BriefcaseBusiness,
 	CircleUserRound,
 	GalleryVerticalEnd,
+	Hammer,
+	Lightbulb,
 	Wallet,
 } from "lucide-react";
 import {
@@ -16,6 +18,8 @@ import { WalletMenu } from "./WalletMenu";
 
 const PRIMARY_NAV_ITEMS = [
 	{ id: "week", label: "Feed", Icon: GalleryVerticalEnd },
+	{ id: "ideas", label: "Ideas", Icon: Lightbulb },
+	{ id: "builder", label: "Builder", Icon: Hammer },
 	{ id: "positions", label: "Portfolio", Icon: BriefcaseBusiness },
 	{ id: "account", label: "Account", Icon: CircleUserRound },
 ] satisfies Array<{
@@ -88,7 +92,7 @@ export function PrimaryNav({
 }
 
 interface Props {
-	active: "week" | "positions" | "receipts" | "account";
+	active: PrimaryView | "receipts";
 	onNavigate: (target: Props["active"]) => void;
 	wallet?: string;
 	onWallet?: () => void;

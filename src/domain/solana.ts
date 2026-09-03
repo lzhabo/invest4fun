@@ -30,8 +30,11 @@ export type SolanaAsset = {
 	symbol: string;
 	name: string;
 	kind: "CRYPTO" | "STOCK_TOKEN";
+	category?: "STOCK" | "ETF" | "COMMODITY" | "PRE_IPO";
 	address: string;
 	decimals: number;
+	iconUrl?: string;
+	description?: string;
 };
 
 /**
@@ -58,7 +61,7 @@ export const SOLANA_ASSET_REGISTRY: Record<string, SolanaAsset> = {
 	AAPLX: {
 		assetId: "sol:mainnet:AAPLx",
 		symbol: "AAPLx",
-		name: "Apple xStock",
+		name: "Apple",
 		kind: "STOCK_TOKEN",
 		address: "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp",
 		decimals: 8,
@@ -66,7 +69,7 @@ export const SOLANA_ASSET_REGISTRY: Record<string, SolanaAsset> = {
 	NVDAX: {
 		assetId: "sol:mainnet:NVDAx",
 		symbol: "NVDAx",
-		name: "NVIDIA xStock",
+		name: "NVIDIA",
 		kind: "STOCK_TOKEN",
 		address: "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh",
 		decimals: 8,
@@ -74,7 +77,7 @@ export const SOLANA_ASSET_REGISTRY: Record<string, SolanaAsset> = {
 	TSLAX: {
 		assetId: "sol:mainnet:TSLAx",
 		symbol: "TSLAx",
-		name: "Tesla xStock",
+		name: "Tesla",
 		kind: "STOCK_TOKEN",
 		address: "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB",
 		decimals: 8,
