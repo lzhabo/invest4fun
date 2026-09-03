@@ -322,7 +322,7 @@ function apiErrorMessage(code: string) {
 		return "Choose at least one eligible asset before continuing.";
 	}
 	if (code === "NO_ELIGIBLE_CANDIDATES_FOR_PREFERENCES") {
-		return "No executable assets matched your feed rules. Try again or adjust them in Account.";
+		return "No executable assets matched your feed rules. Try again or adjust them in Settings.";
 	}
 	return "The basket could not be prepared. Please try again.";
 }

@@ -27,12 +27,11 @@ const candidate = (assetId: string): Candidate =>
 	}) as Candidate;
 
 describe("integer portfolio allocation", () => {
-	it("keeps the original Ideas cards in their established order", () => {
+	it("starts with executable Solana Ideas and omits the unavailable preset", () => {
 		expect(IDEA_BUNDLES.map((bundle) => bundle.id)).toEqual([
-			"war-mode",
+			"solana-infrastructure",
 			"ai-leaders-portfolio",
 			"capitol-gains",
-			"solana-infrastructure",
 		]);
 	});
 

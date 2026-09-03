@@ -71,9 +71,11 @@ import {
 import type { AppTheme, ThemeSettings } from "./theme-settings";
 import { copyWalletAddress, useWalletFunding } from "./use-wallet-funding";
 import {
+	isPublicPrimaryView,
 	type PrimaryView,
 	pathForPrimaryView,
 	primaryViewFromPathname,
+	shouldShowPublicFeedPreview,
 } from "./view-routing";
 import { shouldShowFunding } from "./wallet-funding";
 
@@ -533,7 +535,7 @@ export function App({
 			const defaults = newAccountPreferences();
 			writeAccountPreferences(user.id, defaults);
 			await loadSession(defaults, { accountState: "new" });
-			setPlanNotice("Default settings applied. Edit them anytime in Account.");
+			setPlanNotice("Default settings applied. Edit them anytime in Settings.");
 			return;
 		}
 		if (result.state === "returning") {
@@ -943,9 +945,7 @@ export function App({
 
 	if (
 		entryView === "SKELETON" &&
-		view !== "builder" &&
-		view !== "ideas" &&
-		view !== "market"
+		(view === "receipts" || !isPublicPrimaryView(view))
 	) {
 		if (!bootstrapIssue) return <AppBootstrapSkeleton />;
 		return (
@@ -1048,6 +1048,32 @@ export function App({
 							setStage("review");
 						}}
 					/>
+				) : view !== "receipts" &&
+					shouldShowPublicFeedPreview(view, authenticated) ? (
+					<main className="swipe-page">
+						<section className="swipe-workspace public-feed-preview">
+							<header className="page-heading feed-page-heading">
+								<div>
+									<h1>Explore the Solana feed</h1>
+									<p>Discover assets first. Sign in only when you want to build a basket.</p>
+								</div>
+							</header>
+							<div className="fatal-state wallet-required-state">
+								<h2>Your personalized feed is ready to open.</h2>
+								<p>
+									Sign in to load live Jupiter routes and add assets. Portfolio and
+									 Settings stay private to your wallet.
+								</p>
+								<button
+									type="button"
+									onClick={connectWallet}
+									disabled={!privyReady}
+								>
+									{privyReady ? "Open my feed" : "Loading wallet…"}
+								</button>
+							</div>
+						</section>
+					</main>
 				) : entryView === "WALLET_REQUIRED" ? (
 					<main className="swipe-page">
 						<section className="swipe-workspace">
@@ -1176,7 +1202,7 @@ export function App({
 							if (preferences) await loadSession(preferences);
 						}}
 					/>
-				) : view === "account" && preferences ? (
+				) : view === "settings" && preferences ? (
 					<AccountScreen
 						wallet={wallet}
 						fundingWallet={externalSolanaWallet}

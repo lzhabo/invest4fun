@@ -56,8 +56,7 @@ const xstock = (
 		`https://xstocks-metadata.backed.fi/logos/tokens/${symbol}.png`,
 	);
 
-// The original reference Ideas cards, kept in their established order.
-export const IDEA_BUNDLES: BundleDefinition[] = [
+const IDEA_CATALOG: BundleDefinition[] = [
 	{
 		id: "war-mode",
 		title: "Modern Warfare",
@@ -313,6 +312,18 @@ export const IDEA_BUNDLES: BundleDefinition[] = [
 		],
 	},
 ];
+
+// Keep the unreliable defense preset out of the live feed until at least two
+// of its holdings have stable $1 Jupiter routes.
+export const IDEA_BUNDLES = [
+	"solana-infrastructure",
+	"ai-leaders-portfolio",
+	"capitol-gains",
+].map((id) => {
+	const bundle = IDEA_CATALOG.find((candidate) => candidate.id === id);
+	if (!bundle) throw new Error(`UNKNOWN_IDEA_BUNDLE:${id}`);
+	return bundle;
+});
 
 export function highestWeightBundleHolding(bundle: BundleDefinition) {
 	return bundle.holdings.reduce<BundleHoldingDefinition | undefined>(

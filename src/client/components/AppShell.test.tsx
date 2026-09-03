@@ -20,14 +20,14 @@ describe("PrimaryNav", () => {
 		expect(html).toContain('href="/feed"');
 		expect(html).toContain('href="/builder"');
 		expect(html).toContain('href="/ideas"');
-		expect(html).toContain('href="/account"');
+		expect(html).toContain('href="/settings"');
 		expect(html).toContain("--primary-nav-count:5");
 		expect(labels).toEqual([
 			"Feed",
 			"Ideas",
 			"Builder",
 			"Portfolio",
-			"Account",
+			"Settings",
 		]);
 	});
 });

@@ -1,10 +1,10 @@
 import type { ConnectedStandardSolanaWallet } from "@privy-io/react-auth/solana";
 import {
 	BriefcaseBusiness,
-	CircleUserRound,
 	GalleryVerticalEnd,
 	Hammer,
 	Lightbulb,
+	Settings,
 	Wallet,
 } from "lucide-react";
 import {
@@ -21,7 +21,7 @@ const PRIMARY_NAV_ITEMS = [
 	{ id: "ideas", label: "Ideas", Icon: Lightbulb },
 	{ id: "builder", label: "Builder", Icon: Hammer },
 	{ id: "positions", label: "Portfolio", Icon: BriefcaseBusiness },
-	{ id: "account", label: "Account", Icon: CircleUserRound },
+	{ id: "settings", label: "Settings", Icon: Settings },
 ] satisfies Array<{
 	id: PrimaryView;
 	label: string;
