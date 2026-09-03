@@ -1578,8 +1578,74 @@ html[data-theme="dark"] .topbar.topbar-onboarding .wallet-button:disabled {
   text-align: center;
   font-size: 13px;
 }
-.public-feed-actions { justify-content: center; }
-.public-feed-actions .button { min-width: 210px; }
+.public-feed-complete { gap: 12px; }
+.guest-basket-page {
+  min-height: calc(100dvh - 73px);
+  padding: clamp(28px, 5vw, 64px) 20px;
+}
+.guest-basket-card {
+  width: min(100%, 820px);
+  margin: 0 auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper);
+  padding: clamp(24px, 4vw, 42px);
+}
+.guest-basket-card header h1 {
+  margin: 0 0 10px;
+  font-size: clamp(34px, 5vw, 52px);
+}
+.guest-basket-card header > p:last-child,
+.guest-route-note,
+.guest-basket-empty p { color: var(--muted); }
+.guest-basket-list { display: grid; gap: 10px; margin-top: 30px; }
+.guest-basket-row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto 38px;
+  align-items: center;
+  gap: 12px;
+  min-height: 68px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.guest-basket-row > span { display: grid; }
+.guest-basket-row small { color: var(--muted); }
+.guest-basket-row > button {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.guest-basket-row > button:hover { border-color: var(--coral); color: var(--coral); }
+.guest-basket-row > button svg { width: 16px; }
+.guest-basket-summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-top: 22px;
+  border-top: 1px solid var(--line);
+  padding-top: 20px;
+}
+.guest-basket-summary span { color: var(--muted); }
+.guest-basket-summary strong { font: 26px var(--font-brand); }
+.guest-route-note { margin: 18px 0; font-size: 13px; line-height: 1.5; }
+.guest-basket-actions { display: grid; grid-template-columns: 1fr 1.4fr; gap: 12px; }
+.guest-basket-empty { margin: 30px 0; text-align: center; }
+
+@media (max-width: 760px) {
+  .guest-basket-page { padding: 20px 12px; }
+  .guest-basket-card { padding: 22px 16px; }
+  .guest-basket-row { grid-template-columns: 40px minmax(0, 1fr) 32px; }
+  .guest-basket-row > b { grid-column: 2; }
+  .guest-basket-row > button { grid-column: 3; grid-row: 1 / span 2; }
+  .guest-basket-actions { grid-template-columns: 1fr; }
+}
 
 .swipe-card {
   z-index: 1;

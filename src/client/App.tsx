@@ -66,6 +66,10 @@ import {
 	writeAccountPreferences,
 } from "./preferences-storage";
 import {
+	consumePendingPublicFeedSelections,
+	hasPendingPublicFeedRouteCheck,
+} from "./public-feed-basket";
+import {
 	findEmbeddedSolanaWallet,
 	findExternalSolanaWallet,
 } from "./solana-wallet-selection";
@@ -535,7 +539,10 @@ export function App({
 		if (result.state === "new") {
 			const defaults = newAccountPreferences();
 			writeAccountPreferences(user.id, defaults);
-			await loadSession(defaults, { accountState: "new" });
+			await loadSession(defaults, {
+				accountState: "new",
+				skipFundingCheck: hasPendingPublicFeedRouteCheck(localStorage),
+			});
 			setPlanNotice("Default settings applied. Edit them anytime in Settings.");
 			return;
 		}
@@ -544,6 +551,7 @@ export function App({
 			await loadSession(result.preferences, {
 				persistPreferences: false,
 				accountState: "returning",
+				skipFundingCheck: hasPendingPublicFeedRouteCheck(localStorage),
 			});
 			setPlanNotice("Your saved plan was loaded");
 			return;
@@ -599,6 +607,19 @@ export function App({
 		setFeedUpdatedAt(undefined);
 		setRefreshFeedError("");
 	}, [authenticated, privyReady]);
+
+	useEffect(() => {
+		if (!authenticated || !session || !feed) return;
+		const guestSelections = consumePendingPublicFeedSelections(localStorage);
+		if (!guestSelections.length) return;
+		setBuilderBasket(undefined);
+		setIdeaBasket([]);
+		setSelectedIds([]);
+		setRetrySelections(guestSelections);
+		setReviewReturnView("week");
+		setStage("review");
+		scrollToTop();
+	}, [authenticated, feed, session]);
 
 	useEffect(
 		() => () => {
@@ -1052,7 +1073,7 @@ export function App({
 				) : view !== "receipts" &&
 					shouldShowPublicFeedPreview(view, authenticated) ? (
 					<PublicFeedScreen
-						onSignIn={connectWallet}
+						onCheckRoutes={connectWallet}
 						signInReady={privyReady}
 					/>
 				) : entryView === "WALLET_REQUIRED" ? (
