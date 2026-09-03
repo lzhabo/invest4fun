@@ -2,6 +2,7 @@ import { CircleHelp, WandSparkles } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
 	BundleDefinition,
+	BundleHoldingDefinition,
 	ResolvedBundleHolding,
 } from "../../domain/ideas";
 import { highestWeightBundleHolding } from "../../domain/ideas";
@@ -28,6 +29,7 @@ export function IdeaSwipeCard({
 	onSwipe,
 	loading,
 	routesChecked,
+	excludedHoldings,
 }: {
 	bundle: BundleDefinition;
 	holdings: ResolvedBundleHolding[];
@@ -39,6 +41,7 @@ export function IdeaSwipeCard({
 	onSwipe: (add: boolean) => void;
 	loading: boolean;
 	routesChecked: boolean;
+	excludedHoldings: BundleHoldingDefinition[];
 }) {
 	const pointerStart = useRef<{ id: number; x: number } | undefined>(undefined);
 	const amountInput = useRef<HTMLInputElement>(null);
@@ -270,25 +273,27 @@ export function IdeaSwipeCard({
 						role="img"
 						aria-label="Bundle allocation: 100 percent"
 					>
-						{bundle.holdings.map((holding) => (
+						{holdings.map((holding) => (
 							<i
-								key={holding.assetId}
+								key={holding.candidate.assetId}
 								style={{ width: `${holding.weightBps / 100}%` }}
-								title={`${holding.symbol} ${holding.weightBps / 100}%`}
+								title={`${holding.candidate.symbol} ${holding.weightBps / 100}%`}
 							/>
 						))}
 					</div>
 					{infoOpen ? (
 						<div className="bundle-holdings-grid">
-							{bundle.holdings.map((holding) => (
-								<div className="bundle-holding" key={holding.assetId}>
+							{holdings.map((holding) => (
+								<div className="bundle-holding" key={holding.candidate.assetId}>
 									<AssetMark
-										symbol={holding.symbol}
-										iconUrl={holding.iconUrl}
+										symbol={holding.candidate.symbol}
+										iconUrl={holding.candidate.iconUrl}
 										size="sm"
 										decorative
 									/>
-									<strong title={holding.name}>{holding.symbol}</strong>
+									<strong title={holding.candidate.name}>
+										{holding.candidate.symbol}
+									</strong>
 									<b>
 										{(holding.weightBps / 100).toFixed(
 											holding.weightBps % 100 ? 1 : 0,
@@ -302,6 +307,15 @@ export function IdeaSwipeCard({
 					{routesChecked && !holdings.length ? (
 						<p>
 							No executable holdings are available for this preset right now.
+						</p>
+					) : null}
+					{routesChecked && holdings.length ? (
+						<p className="bundle-micro-disclosure">
+							$1 micro composition: {holdings.length} of {bundle.holdings.length}
+							 assets, using the executable weights shown above.
+							{excludedHoldings.length
+								? ` Excluded now: ${excludedHoldings.map((holding) => holding.symbol).join(", ")}.`
+								: ""}
 						</p>
 					) : null}
 					{hasRealHistory ? (

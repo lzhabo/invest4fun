@@ -2,6 +2,9 @@ import type { Candidate } from "./schemas.js";
 import { normalizeWeights } from "./strategies.js";
 
 export const MINIMUM_POSITION_AMOUNT_CENTS = 10;
+export const MICRO_IDEA_AMOUNT_CENTS = 100;
+export const MICRO_IDEA_MAX_HOLDINGS = 5;
+export const MICRO_IDEA_MIN_HOLDINGS = 2;
 
 export type BundleRisk = "Medium risk" | "High risk";
 
@@ -65,7 +68,7 @@ export const IDEA_BUNDLES: BundleDefinition[] = [
 			"A geopolitical-risk basket focused on defense primes and strategic manufacturers.",
 		risk: "High risk",
 		sourceUrl: "https://app.cesto.co/product/war-mode",
-		minimumInvestmentCents: 2500,
+		minimumInvestmentCents: MICRO_IDEA_AMOUNT_CENTS,
 		holdings: [
 			token(
 				"12BvLZtzjdssAycxPeBQUjukhmgQpULAvy6SroYdondo",
@@ -135,7 +138,7 @@ export const IDEA_BUNDLES: BundleDefinition[] = [
 			"A concentrated tokenized-equity basket across the companies building and distributing AI.",
 		risk: "High risk",
 		sourceUrl: "https://app.cesto.co/product/ai-leaders-portfolio",
-		minimumInvestmentCents: 1500,
+		minimumInvestmentCents: MICRO_IDEA_AMOUNT_CENTS,
 		holdings: [
 			xstock(
 				"Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh",
@@ -191,7 +194,7 @@ export const IDEA_BUNDLES: BundleDefinition[] = [
 			"A conviction-weighted equity basket shaped by trade size and cross-politician popularity.",
 		risk: "High risk",
 		sourceUrl: "https://app.cesto.co/product/capitol-gains",
-		minimumInvestmentCents: 3000,
+		minimumInvestmentCents: MICRO_IDEA_AMOUNT_CENTS,
 		holdings: [
 			xstock(
 				"Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh",
@@ -252,7 +255,7 @@ export const IDEA_BUNDLES: BundleDefinition[] = [
 			"Liquid staking, trading infrastructure, and core Solana exposure.",
 		risk: "Medium risk",
 		sourceUrl: "https://app.cesto.co/product/solana-infrastructure",
-		minimumInvestmentCents: 2500,
+		minimumInvestmentCents: MICRO_IDEA_AMOUNT_CENTS,
 		holdings: [
 			token(
 				"So11111111111111111111111111111111111111112",
@@ -346,6 +349,40 @@ export function resolveBundleHoldings(
 		...holding,
 		weightBps: weights[index] ?? 0,
 	}));
+}
+
+export function resolveMicroBundleHoldings(
+	bundle: BundleDefinition,
+	candidates: Candidate[],
+	maxHoldings = MICRO_IDEA_MAX_HOLDINGS,
+): ResolvedBundleHolding[] {
+	const candidateIds = new Set(candidates.map((candidate) => candidate.assetId));
+	const selectedIds = new Set(
+		bundle.holdings
+			.map((holding, index) => ({ holding, index }))
+			.filter(({ holding }) => candidateIds.has(holding.assetId))
+			.sort(
+				(left, right) =>
+					right.holding.weightBps - left.holding.weightBps ||
+					left.index - right.index,
+			)
+			.slice(0, maxHoldings)
+			.map(({ holding }) => holding.assetId),
+	);
+	return resolveBundleHoldings(
+		bundle,
+		candidates.filter((candidate) => selectedIds.has(candidate.assetId)),
+	);
+}
+
+export function excludedBundleHoldings(
+	bundle: BundleDefinition,
+	holdings: ResolvedBundleHolding[],
+) {
+	const includedIds = new Set(
+		holdings.map((holding) => holding.candidate.assetId),
+	);
+	return bundle.holdings.filter((holding) => !includedIds.has(holding.assetId));
 }
 
 export function minimumBundleAmountCents(holdings: ResolvedBundleHolding[]) {

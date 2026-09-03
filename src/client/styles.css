@@ -3396,6 +3396,7 @@ html[data-theme="dark"] .button-top-up:hover:not(:disabled) { color: var(--accen
   text-align: left;
 }
 .ideas-error { max-width: 720px; margin: 10px auto 0; color: var(--coral); font-size: 12px; font-weight: 700; text-align: center; }
+.ideas-warning { max-width: 720px; margin: 10px auto 0; color: var(--muted); font-size: 12px; font-weight: 700; text-align: center; }
 .ideas-complete-actions { display: flex; justify-content: center; gap: 12px; margin-top: 18px; }
 .ideas-chain-gate { min-height: calc(100dvh - 74px); display: grid; place-content: center; justify-items: center; gap: 14px; padding: 24px; text-align: center; }
 .ideas-chain-gate h1 { margin: 0; font-family: var(--font-accent); font-size: 44px; font-weight: 400; }

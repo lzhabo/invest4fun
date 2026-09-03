@@ -3,7 +3,9 @@ import {
 	allocateWeightedCents,
 	bundleExecutionLegs,
 	IDEA_BUNDLES,
+	MICRO_IDEA_AMOUNT_CENTS,
 	minimumWeightedAmountCents,
+	resolveMicroBundleHoldings,
 } from "../src/domain/ideas.js";
 import type { Candidate } from "../src/domain/schemas.js";
 
@@ -32,6 +34,46 @@ describe("integer portfolio allocation", () => {
 			"capitol-gains",
 			"solana-infrastructure",
 		]);
+	});
+
+	it("sets every Ideas card minimum to one USDC", () => {
+		expect(
+			IDEA_BUNDLES.every(
+				(bundle) => bundle.minimumInvestmentCents === MICRO_IDEA_AMOUNT_CENTS,
+			),
+		).toBe(true);
+	});
+
+	it("builds stable micro compositions that can execute for one USDC", () => {
+		const bundle = IDEA_BUNDLES[0];
+		if (!bundle) throw new Error("Missing test bundle");
+		const holdings = resolveMicroBundleHoldings(
+			bundle,
+			bundle.holdings.map((holding) => candidate(holding.assetId)),
+		);
+		expect(holdings).toHaveLength(5);
+		expect(holdings.map((holding) => holding.candidate.assetId)).toEqual(
+			bundle.holdings.slice(0, 5).map((holding) => holding.assetId),
+		);
+		expect(holdings.reduce((sum, holding) => sum + holding.weightBps, 0)).toBe(
+			10_000,
+		);
+		for (const idea of IDEA_BUNDLES) {
+			const micro = resolveMicroBundleHoldings(
+				idea,
+				idea.holdings.map((holding) => candidate(holding.assetId)),
+			);
+			expect(micro).toHaveLength(5);
+			expect(micro.reduce((sum, holding) => sum + holding.weightBps, 0)).toBe(
+				10_000,
+			);
+			expect(
+				allocateWeightedCents(
+					MICRO_IDEA_AMOUNT_CENTS,
+					micro.map((holding) => holding.weightBps),
+				).every((amount) => amount >= 10),
+			).toBe(true);
+		}
 	});
 
 	it("allocates integer cents without losing the remainder", () => {

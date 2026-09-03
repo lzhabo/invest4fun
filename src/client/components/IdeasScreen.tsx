@@ -3,14 +3,32 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
 	allocateWeightedCents,
 	type BundleBasketItem,
+	excludedBundleHoldings,
 	IDEA_BUNDLES,
+	MICRO_IDEA_AMOUNT_CENTS,
+	MICRO_IDEA_MIN_HOLDINGS,
 	minimumBundleAmountCents,
-	resolveBundleHoldings,
+	minimumWeightedAmountCents,
+	resolveMicroBundleHoldings,
 } from "../../domain/ideas";
-import { api, type BuilderPreflightResponse, type WeeklySession } from "../api";
+import {
+	api,
+	type BuilderPreflightIssue,
+	type BuilderPreflightResponse,
+	type WeeklySession,
+} from "../api";
 import { IdeaSwipeCard } from "./IdeaSwipeCard";
 
-const DEFAULT_IDEA_AMOUNT_CENTS = 10_000;
+const DEFAULT_IDEA_AMOUNT_CENTS = MICRO_IDEA_AMOUNT_CENTS;
+
+const NON_BLOCKING_PREFLIGHT_CODES = new Set([
+	"INSUFFICIENT_FUNDS",
+	"BALANCE_CHECK_FAILED",
+]);
+
+export function isBlockingIdeaPreflightIssue(issue: BuilderPreflightIssue) {
+	return !NON_BLOCKING_PREFLIGHT_CODES.has(issue.code);
+}
 
 export function IdeasScreen({
 	session,
@@ -34,6 +52,7 @@ export function IdeasScreen({
 	const [feedback, setFeedback] = useState<"invest" | "skip">();
 	const [amounts, setAmounts] = useState<Record<string, number>>({});
 	const [preflight, setPreflight] = useState<BuilderPreflightResponse>();
+	const [holdings, setHoldings] = useState<BundleBasketItem["holdings"]>([]);
 	const [loadingBundle, setLoadingBundle] = useState("");
 	const [loadError, setLoadError] = useState("");
 	const [activeSession, setActiveSession] = useState(session);
@@ -63,29 +82,84 @@ export function IdeasScreen({
 	useEffect(() => {
 		if (!bundle || !activeSession || amountCents <= 0) {
 			setPreflight(undefined);
+			setHoldings([]);
 			return;
 		}
 		let active = true;
-		const amountsByHolding = allocateWeightedCents(
-			amountCents,
-			bundle.holdings.map((holding) => holding.weightBps),
-		);
 		setPreflight(undefined);
+		setHoldings([]);
 		setLoadingBundle(bundle.id);
 		setLoadError("");
-		void api
-			.builderPreflight(
+		void (async () => {
+			const discoveryAmountCents = Math.max(
+				amountCents,
+				minimumWeightedAmountCents(
+					bundle.holdings.map((holding) => holding.weightBps),
+				),
+			);
+			const discoveryAmounts = allocateWeightedCents(
+				discoveryAmountCents,
+				bundle.holdings.map((holding) => holding.weightBps),
+			);
+			const discovery = await api.builderPreflight(
 				activeSession.id,
 				bundle.holdings.map((holding, holdingIndex) => ({
 					assetId: holding.assetId,
 					amountInBaseUnits: (
-						BigInt(amountsByHolding[holdingIndex] ?? 0) * 10_000n
+						BigInt(discoveryAmounts[holdingIndex] ?? 0) * 10_000n
 					).toString(),
 				})),
 				periodLimitUsd,
-			)
+			);
+
+			let candidatePool = discovery.candidates;
+			let exact = discovery;
+			let resolved = resolveMicroBundleHoldings(bundle, candidatePool);
+			for (let attempt = 0; attempt < bundle.holdings.length; attempt += 1) {
+				if (resolved.length < MICRO_IDEA_MIN_HOLDINGS) break;
+				const exactAmounts = allocateWeightedCents(
+					amountCents,
+					resolved.map((holding) => holding.weightBps),
+				);
+				exact = await api.builderPreflight(
+					activeSession.id,
+					resolved.map((holding, holdingIndex) => ({
+						assetId: holding.candidate.assetId,
+						amountInBaseUnits: (
+							BigInt(exactAmounts[holdingIndex] ?? 0) * 10_000n
+						).toString(),
+					})),
+					periodLimitUsd,
+				);
+				const exactIds = new Set(
+					exact.candidates.map((candidate) => candidate.assetId),
+				);
+				const failedIds = new Set([
+					...resolved
+						.filter((holding) => !exactIds.has(holding.candidate.assetId))
+						.map((holding) => holding.candidate.assetId),
+					...exact.issues.flatMap((issue) =>
+						issue.assetId && isBlockingIdeaPreflightIssue(issue)
+							? [issue.assetId]
+							: [],
+					),
+				]);
+				if (!failedIds.size) {
+					resolved = resolveMicroBundleHoldings(bundle, exact.candidates);
+					break;
+				}
+				candidatePool = candidatePool.filter(
+					(candidate) => !failedIds.has(candidate.assetId),
+				);
+				resolved = resolveMicroBundleHoldings(bundle, candidatePool);
+			}
+			if (active) {
+				setPreflight(exact);
+				setHoldings(resolved);
+			}
+		})()
 			.then((next) => {
-				if (active) setPreflight(next);
+				void next;
 			})
 			.catch((error) => {
 				if (active)
@@ -103,27 +177,42 @@ export function IdeasScreen({
 		};
 	}, [activeSession, amountCents, bundle, periodLimitUsd]);
 
-	const holdings = useMemo(
-		() =>
-			bundle ? resolveBundleHoldings(bundle, preflight?.candidates ?? []) : [],
-		[bundle, preflight],
+	const excludedHoldings = useMemo(
+		() => (bundle ? excludedBundleHoldings(bundle, holdings) : []),
+		[bundle, holdings],
 	);
 	const minimumCents = Math.max(
 		minimumBundleAmountCents(holdings),
 		bundle?.minimumInvestmentCents ?? 0,
 	);
 	const preflightMessages = [
-		...new Set((preflight?.issues ?? []).map((issue) => issue.message)),
+		...new Set(
+			(preflight?.issues ?? [])
+				.filter(
+					(issue) => !issue.assetId && isBlockingIdeaPreflightIssue(issue),
+				)
+				.map((issue) => issue.message),
+		),
 	];
+	const fundingMessages = [
+		...new Set(
+			(preflight?.issues ?? [])
+				.filter((issue) => !isBlockingIdeaPreflightIssue(issue))
+				.map(() => "You can add this Idea now. Funds are checked at checkout."),
+		),
+	];
+	const blockingIssues = (preflight?.issues ?? []).filter(
+		isBlockingIdeaPreflightIssue,
+	);
 	const amountValid =
 		Number.isFinite(minimumCents) &&
 		amountCents >= minimumCents &&
 		amountCents <= remainingCents;
 	const canAdd = Boolean(
 		bundle &&
-			holdings.length === bundle.holdings.length &&
+			holdings.length >= MICRO_IDEA_MIN_HOLDINGS &&
 			amountValid &&
-			!preflight?.issues.length &&
+			!blockingIssues.length &&
 			!feedback &&
 			!loadingBundle,
 	);
@@ -142,6 +231,7 @@ export function IdeasScreen({
 				});
 			setIndex((current) => current + 1);
 			setPreflight(undefined);
+			setHoldings([]);
 			setInfoOpen(false);
 			setFeedback(undefined);
 		}, 300);
@@ -237,6 +327,7 @@ export function IdeasScreen({
 						onSwipe={(add) => (add ? void requestAdd() : advance(false))}
 						loading={loadingBundle === bundle.id || loadingBundle === "session"}
 						routesChecked={Boolean(activeSession && preflight)}
+						excludedHoldings={excludedHoldings}
 					/>
 					<button
 						type="button"
@@ -259,6 +350,11 @@ export function IdeasScreen({
 				) : null}
 				{preflightMessages.map((message) => (
 					<p className="ideas-error" role="alert" key={message}>
+						{message}
+					</p>
+				))}
+				{fundingMessages.map((message) => (
+					<p className="ideas-warning" role="status" key={message}>
 						{message}
 					</p>
 				))}
