@@ -327,7 +327,7 @@ function PriceSparkline({
 			className={`price-chart${change < 0 ? " is-down" : ""}${infoOpen ? " has-info" : ""}`}
 		>
 			<div className="chart-meta">
-				<strong>{formatUsdPrice(candidate.marketPriceUsd ?? 0)}</strong>
+				<strong>{formatUsdPrice(candidate.marketPriceUsd ?? last ?? 0)}</strong>
 				<span>
 					{prices.length
 						? `${change >= 0 ? "+" : ""}${change.toFixed(2)}% · ${periodLabel}`

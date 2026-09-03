@@ -1572,6 +1572,14 @@ html[data-theme="dark"] .topbar.topbar-onboarding .wallet-button:disabled {
 .gesture small { color: var(--muted); font-size: 12px; font-weight: 500; margin-top: 3px; }
 .gesture-skip { color: var(--coral); }
 .gesture-add > svg { color: var(--ink); background: var(--acid); }
+.public-feed-position {
+  color: var(--muted);
+  margin: -4px 0 14px;
+  text-align: center;
+  font-size: 13px;
+}
+.public-feed-actions { justify-content: center; }
+.public-feed-actions .button { min-width: 210px; }
 
 .swipe-card {
   z-index: 1;

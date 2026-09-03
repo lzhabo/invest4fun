@@ -51,6 +51,7 @@ import { Confetti } from "./components/magicui/confetti";
 import { Onboarding } from "./components/Onboarding";
 import { AppBootstrapSkeleton } from "./components/PageSkeletons";
 import { PositionsScreen } from "./components/PositionsScreen";
+import { PublicFeedScreen } from "./components/PublicFeedScreen";
 import { ReceiptScreen } from "./components/ReceiptScreen";
 import { ReviewScreen } from "./components/ReviewScreen";
 import { SwipeCard } from "./components/SwipeCard";
@@ -1050,30 +1051,10 @@ export function App({
 					/>
 				) : view !== "receipts" &&
 					shouldShowPublicFeedPreview(view, authenticated) ? (
-					<main className="swipe-page">
-						<section className="swipe-workspace public-feed-preview">
-							<header className="page-heading feed-page-heading">
-								<div>
-									<h1>Explore the Solana feed</h1>
-									<p>Discover assets first. Sign in only when you want to build a basket.</p>
-								</div>
-							</header>
-							<div className="fatal-state wallet-required-state">
-								<h2>Your personalized feed is ready to open.</h2>
-								<p>
-									Sign in to load live Jupiter routes and add assets. Portfolio and
-									 Settings stay private to your wallet.
-								</p>
-								<button
-									type="button"
-									onClick={connectWallet}
-									disabled={!privyReady}
-								>
-									{privyReady ? "Open my feed" : "Loading wallet…"}
-								</button>
-							</div>
-						</section>
-					</main>
+					<PublicFeedScreen
+						onSignIn={connectWallet}
+						signInReady={privyReady}
+					/>
 				) : entryView === "WALLET_REQUIRED" ? (
 					<main className="swipe-page">
 						<section className="swipe-workspace">
