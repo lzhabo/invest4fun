@@ -1213,8 +1213,8 @@ export function createApp(deps: AppDependencies) {
 				session.executionProvider,
 			);
 			const candidates: Candidate[] = [];
-			for (const selection of parsed.selections) {
-				try {
+			const candidateResults = await Promise.allSettled(
+				parsed.selections.map(async (selection) => {
 					const resolved = await candidatesForSession.getCandidatesForExecution(
 						response.locals.wallet,
 						[selection.assetId],
@@ -1222,18 +1222,23 @@ export function createApp(deps: AppDependencies) {
 						new Date(),
 						response.locals.txOrigin,
 					);
-					const candidate = resolved.find(
+					return resolved.find(
 						(item) => item.assetId === selection.assetId,
 					);
-					if (candidate) candidates.push(candidate);
-					else {
+				}),
+			);
+			for (const [index, result] of candidateResults.entries()) {
+				const selection = parsed.selections[index];
+				if (!selection) continue;
+				if (result.status === "fulfilled") {
+					if (result.value) candidates.push(result.value);
+					else
 						issues.push({
 							code: "ASSET_NOT_EXECUTABLE",
 							assetId: selection.assetId,
 							message: "No executable Jupiter candidate is available.",
 						});
-					}
-				} catch {
+				} else {
 					issues.push({
 						code: "CANDIDATE_CHECK_FAILED",
 						assetId: selection.assetId,
@@ -1242,17 +1247,21 @@ export function createApp(deps: AppDependencies) {
 				}
 			}
 
-			try {
-				validateExecutionAssets(parsed, candidates);
-			} catch (error) {
-				issues.push({
-					code:
-						error instanceof PolicyError ? error.code : "POLICY_CHECK_FAILED",
-					message:
-						error instanceof Error
-							? error.message
-							: "The portfolio failed policy validation.",
-				});
+			if (candidates.length === parsed.selections.length) {
+				try {
+					validateExecutionAssets(parsed, candidates);
+				} catch (error) {
+					issues.push({
+						code:
+							error instanceof PolicyError
+								? error.code
+								: "POLICY_CHECK_FAILED",
+						message:
+							error instanceof Error
+								? error.message
+								: "The portfolio failed policy validation.",
+					});
+				}
 			}
 
 			const executionForSession = executionProvider(
@@ -1260,22 +1269,29 @@ export function createApp(deps: AppDependencies) {
 				session.executionProvider,
 			);
 			const quotes: Quote[] = [];
-			for (const selection of parsed.selections) {
+			const quoteSelections = parsed.selections.flatMap((selection) => {
 				const candidate = candidates.find(
 					(item) => item.assetId === selection.assetId,
 				);
-				if (!candidate) continue;
-				try {
-					quotes.push(
-						await executionForSession.price(
+				return candidate ? [{ selection, candidate }] : [];
+			});
+			const quoteResults = await Promise.allSettled(
+				quoteSelections.map(({ selection, candidate }) =>
+					executionForSession.price(
 							response.locals.wallet,
 							response.locals.txOrigin,
 							candidate,
 							selection.amountInBaseUnits,
 							parsed.slippageBps,
 						),
-					);
-				} catch (error) {
+				),
+			);
+			for (const [index, result] of quoteResults.entries()) {
+				const selection = quoteSelections[index]?.selection;
+				if (!selection) continue;
+				if (result.status === "fulfilled") quotes.push(result.value);
+				else {
+					const error = result.reason;
 					issues.push({
 						code:
 							error instanceof ExecutionProviderError
